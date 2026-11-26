@@ -30,7 +30,7 @@ export interface RenderState {
 export const HEX = { blue: 0x56d4f2, red: 0xff637e, gold: 0xf2d59b, hyp: 0xa89abc, ivory: 0xe4e9ee, muted: 0x8190a4, phase: 0xb79cff } as const;
 const teamHex = (t: string) => (t === 'blue' ? HEX.blue : t === 'red' ? HEX.red : HEX.gold);
 const H = 0.55; // vertical GU per second in the temporal prism
-const PAST = 10, FUTURE = 8;
+let PAST = 10, FUTURE = 8;
 
 function contactTexture() {
   const c = document.createElement('canvas'); c.width = c.height = 96; const ctx = c.getContext('2d')!;
@@ -168,7 +168,8 @@ export class Battlefield {
     return m;
   }
 
-  private yy(time: number) { const s = this.state!; return (time - s.t) * H * this.unfold; }
+  private h = H;
+  private yy(time: number) { const s = this.state!; return (time - s.t) * this.h * this.unfold; }
 
   private label(text: string, p: Point, y: number, cls = '', dx = 0, dy = 0) {
     let e = this.labels[this.labelUse];
@@ -183,6 +184,8 @@ export class Battlefield {
   private build() {
     const s = this.state!; const k = s.k, st = this.strokes, mk = this.marks;
     const bd = this.bold;
+    // the reveal compresses the whole match into one prism
+    PAST = k.omniscient ? Math.max(10, s.t) : 10; FUTURE = k.omniscient ? 0 : 8; this.h = k.omniscient ? Math.min(H, 7.5 / Math.max(PAST, 1)) : H;
     st.reset(); mk.reset(); bd.reset(); this.labelUse = 0;
     const temporal = this.unfold > .01, u = this.unfold;
     const yy = (time: number) => this.yy(time);
@@ -204,9 +207,11 @@ export class Battlefield {
     }
     for (const n of k.nexus) {
       const m = this.model(n.id, { kind: 'nexus', team: 'neutral' });
+      seenIds.add(n.id);
       m.position.set(n.pos.x, .01, n.pos.z); m.visible = true;
       m.userData.spin = n.controller ? .5 : .12;
     }
+    for (const [id, m] of this.models) if (!seenIds.has(id)) m.visible = false; // units absent from this scenario
     // own plan ghosts (exact for own motion; production is hypothesis)
     for (const [id, g] of this.ghosts) {
       const seen = k.units.find(x => x.id === id);
@@ -219,8 +224,9 @@ export class Battlefield {
 
     // ── board slices / prism ─────────────────────────────────────────────
     if (temporal) {
-      for (let dt = -PAST; dt <= FUTURE; dt += 2) {
-        const at = Math.round((s.t + dt) / 2) * 2; if (at < 0 || at > k.duration || Math.abs(at - s.t) < .2) continue;
+      const step = k.omniscient ? 4 : 2;
+      for (let dt = -PAST; dt <= FUTURE; dt += step) {
+        const at = Math.round((s.t + dt) / step) * step; if (at < 0 || at > k.duration || Math.abs(at - s.t) < .2) continue;
         const y = yy(at), fut = at > s.now + 1e-6, a = (fut ? .07 : .12) * u;
         for (let i = 1; i < 8; i++) { st.segment([i, y, 0], [i, y, 8], fut ? HEX.hyp : HEX.muted, a); st.segment([0, y, i], [8, y, i], fut ? HEX.hyp : HEX.muted, a); }
         const c: V3[] = [[0, y, 0], [8, y, 0], [8, y, 8], [0, y, 8]];
@@ -242,7 +248,7 @@ export class Battlefield {
     if (this.cone.visible) {
       const depth = Math.min(PAST, k.t);
       this.cone.position.set(O.x, yy(k.t), O.z);
-      this.cone.scale.set(depth, Math.max(1e-3, depth * H * u), depth);
+      this.cone.scale.set(depth, Math.max(1e-3, depth * this.h * u), depth);
       this.cone.material.uniforms.now.value = this.clock;
       for (let d = 1; d <= depth; d += 1) st.ring(O, yy(k.t - d), d, HEX.blue, (d % 2 ? .1 : .22) * u, { clip: true });
       this.label('PAST LIGHT CONE', { x: O.x + depth * .5, z: O.z + depth * .62 }, yy(k.t - depth * .62), 'cone');
@@ -408,7 +414,8 @@ export class Battlefield {
     const { w, h } = this.size, aspect = w / h;
     const viewH = Math.max(9.2 + this.unfold * 3.6, 13.2 / aspect) / this.zoomFactor;
     this.camera.top = viewH / 2; this.camera.bottom = -viewH / 2; this.camera.left = -viewH * aspect / 2; this.camera.right = viewH * aspect / 2;
-    const aim = new T.Vector3(4, .1 + this.unfold * 1.0, 4).add(this.pan), e = this.elevation - this.unfold * .2;
+    const omni = this.state?.k.omniscient ? -2.6 : 1.0;
+    const aim = new T.Vector3(4, .1 + this.unfold * omni, 4).add(this.pan), e = this.elevation - this.unfold * .2;
     this.camera.position.copy(aim).add(new T.Vector3(40 * Math.sin(this.yaw) * Math.cos(e), 40 * Math.sin(e), 40 * Math.cos(this.yaw) * Math.cos(e)));
     this.camera.lookAt(aim); this.camera.updateProjectionMatrix(); this.camera.updateMatrixWorld();
   }

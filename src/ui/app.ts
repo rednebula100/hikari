@@ -28,7 +28,7 @@ const store = {
 };
 
 interface Draft { unitId: string; emit: number; actions: Action[] }
-interface PulseForm { at: number; target: Point; phase: number; amplitude: number; hyp: number; picking: boolean }
+interface PulseForm { at: number; target: Point; phase: number; amplitude: number; hyp: number; picking: boolean; align: boolean }
 
 // ── state ────────────────────────────────────────────────────────────────
 let match: Match | null = null;
@@ -42,7 +42,7 @@ let cursor = 0;
 let resolving = false, rate = 1, reveal = false;
 let speed: Speed = 0.6;
 let hover: Point | null = null;
-let pulse: PulseForm = { at: 0, target: ORIGIN.red, phase: 0, amplitude: 1, hyp: 0, picking: false };
+let pulse: PulseForm = { at: 0, target: ORIGIN.red, phase: 0, amplitude: 1, hyp: -1, picking: false, align: true };
 let seenEvents = new Set<string>();
 let toastTimer = 0;
 let firstUnfold = true;
@@ -65,7 +65,7 @@ function start(opts: { ai?: AILevel; trial?: Trial }) {
   drafts = []; undo = []; redo = []; reveal = false; resolving = false;
   selectedId = opts.trial?.def.units.find(u => u.team === 'blue' && u.kind !== 'origin')?.id ?? 'blue-courier-a';
   cursor = match.now; mode = 'space'; speed = 0.6;
-  pulse = { at: 0, target: ORIGIN.red, phase: 0, amplitude: 1, hyp: 0, picking: false };
+  pulse = { at: 0, target: ORIGIN.red, phase: 0, amplitude: 1, hyp: -1, picking: false, align: true };
   seenEvents = new Set(match.view().events.map(e => e.id));
   bf.resetCamera();
   $('overlay').hidden = true;
@@ -92,7 +92,7 @@ function commit() {
 }
 let lastTick = performance.now();
 function tick(now: number) {
-  const dt = Math.min(.1, (now - lastTick) / 1000); lastTick = now;
+  const dt = Math.max(0, Math.min(.1, (now - lastTick) / 1000)); lastTick = Math.max(lastTick, now);
   if (match && resolving) {
     const done = match.resolveTo(match.now + dt * rate);
     cursor = match.now;
@@ -131,7 +131,7 @@ function onPick(p: Point, unitId?: string, button = 0) {
     if (d && d.actions.length) { snapshot(); d.actions.pop(); if (!d.actions.length) drafts = drafts.filter(x => x !== d); return recompute(); }
     selectedId = null; return refresh();
   }
-  if (pulse.picking && selectedId?.endsWith('phaser')) { pulse.target = p; pulse.picking = false; return refresh(); }
+  if (pulse.picking && selectedId?.endsWith('phaser')) { pulse.target = p; pulse.picking = false; pulse.hyp = -1; pulse.align = true; return refresh(); }
   const own = selectedId && selectedId.startsWith('blue-') && !selectedId.endsWith('origin') && !reveal && match.phase === 'planning' && !resolving;
   const clickedOwnUnit = unitId && unitId.startsWith('blue-');
   if (own && !clickedOwnUnit) return addAction(selectedId!, { type: 'move', to: p, speed });
@@ -225,11 +225,26 @@ function renderObjective() {
   const m = match!, o = $('objective');
   if (!m.trial) {
     o.hidden = false; o.className = 'panel';
-    o.innerHTML = '<div class="eyebrow">SKIRMISH · ' + AI_NAMES[m.aiLevel ?? 2] + '</div><h2>미래를 배달하라</h2><div class="goal">T=' + m.def.duration + '까지 더 많은 데이터를 코어로.</div><div class="prog">넥서스에 쿠리어 → 데이터 생성 → 빛의 속도로 코어</div>';
+    o.innerHTML = '<div class="eyebrow">SKIRMISH · ' + AI_NAMES[m.aiLevel ?? 2] + '</div><h2>미래를 배달하라</h2><div class="goal">T=' + m.def.duration + '까지 더 많은 데이터를 코어로.</div><div class="prog">' + (m.round <= 3 ? coach() : '넥서스에 쿠리어 → 데이터 생성 → 빛의 속도로 코어') + '</div>';
     return;
   }
   o.hidden = false; o.className = 'panel';
-  o.innerHTML = '<div class="eyebrow">CAUSAL TRIAL ' + m.trial.index + '</div><h2>' + esc(m.trial.title) + '</h2><div class="goal">' + esc(m.trial.goal) + '</div>';
+  o.innerHTML = '<div class="eyebrow">CAUSAL TRIAL ' + m.trial.index + '</div><h2>' + esc(m.trial.title) + '</h2><div class="goal">' + esc(m.trial.goal) + '</div><div class="prog">' + coach() + '</div>';
+}
+/** Context-sensitive first-steps coach (shown in trials and in the first skirmish rounds). */
+function coach(): string {
+  const m = match!;
+  if (reveal || m.phase === 'finished') return '';
+  if (resolving) return mode === 'time' ? '빛원뿔 위의 실체들 = 지금 도착한 빛. 위로 갈수록 미래.' : '명령은 빛의 속도로 이동 중 — <span class="kbd">2</span> 로 시공간을 펼쳐 보세요.';
+  const sel = selectedId ? k.units.find(u => u.id === selectedId) : undefined;
+  const hasDraft = drafts.some(d => d.actions.length);
+  if (!m.history.length && !hasDraft) {
+    if (!sel || sel.team !== 'blue' || sel.kind === 'origin') return '① 아군 기물을 클릭해 선택하세요.';
+    if (sel.kind === 'phaser') return '① 오른쪽 PHASE ECLIPSE 패널에서 표적 패킷·시각·위상을 맞추고 «펄스 추가».';
+    return '② 넥서스(금빛 다이아몬드) 꼭짓점을 클릭해 이동을 추가하세요. 오른쪽에서 속도별 «보정 완료» 시각을 비교할 수 있습니다.';
+  }
+  if (hasDraft) return '③ <span class="kbd">↵</span> 로 송신하고 2초를 진행합니다. 명령은 기물에 빛이 닿은 뒤에야 실행됩니다.';
+  return '아무것도 보내지 않아도 <span class="kbd">↵</span> 로 시간을 진행할 수 있습니다. <span class="kbd">Q</span>/<span class="kbd">E</span> 로 과거·미래를 살펴보세요.';
 }
 
 function renderOrders() {
@@ -368,7 +383,14 @@ function pulsePanel(u: SeenUnit) {
   if (pulse.at < minAt) pulse.at = minAt;
   const pos = positionAt(p.unitDef(u.id)!.at, p.legs(u.id), pulse.at);
   const hyps = hypotheses(pulse.target);
-  const h = hyps[Math.min(pulse.hyp, hyps.length - 1)];
+  if (hyps.length && (pulse.hyp < 0 || pulse.hyp >= hyps.length || pulse.align)) {
+    const d0 = distance(positionAt(p.unitDef(u.id)!.at, p.legs(u.id), minAt), pulse.target);
+    if (pulse.hyp < 0 || pulse.hyp >= hyps.length) pulse.hyp = Math.max(0, hyps.findIndex(x => x.arrive - d0 >= minAt - 1e-9));
+    // latest grid instant whose 1 s pulse still covers the whole 0.5 s data window
+    pulse.at = Math.max(minAt, Math.floor((hyps[pulse.hyp].arrive - d0 + 1e-9) / RULES.emitStep) * RULES.emitStep);
+    pulse.align = false;
+  }
+  const h = hyps[Math.min(Math.max(0, pulse.hyp), hyps.length - 1)];
   const dS = distance(pos, pulse.target), aJ = pulse.at + dS;
   let s = '<div class="sect">PHASE ECLIPSE · 펄스 설계</div>';
   s += '<div class="btnrow"><button class="btn" data-ptarget="core">표적: 적 코어</button><button class="btn" data-ptarget="pick">' + (pulse.picking ? '꼭짓점을 클릭…' : '표적 직접 지정') + '</button></div>';
@@ -415,12 +437,12 @@ function bindInspector() {
     const via = relay ? positionAt(relay.at, plan!.legs('blue-relay'), match!.def.duration) : undefined;
     addAction(selectedId!, { type: 'route', policy, ...(policy !== 'direct' && via ? { via: { x: Math.round(via.x), z: Math.round(via.z) } } : {}) });
   });
-  el.querySelectorAll<HTMLButtonElement>('[data-ptarget]').forEach(b => b.onclick = () => { if (b.dataset.ptarget === 'core') { pulse.target = ORIGIN.red; pulse.picking = false; } else pulse.picking = true; refresh(); });
+  el.querySelectorAll<HTMLButtonElement>('[data-ptarget]').forEach(b => b.onclick = () => { if (b.dataset.ptarget === 'core') { pulse.target = ORIGIN.red; pulse.picking = false; pulse.hyp = -1; pulse.align = true; } else pulse.picking = true; refresh(); });
   el.querySelectorAll<HTMLButtonElement>('[data-pat]').forEach(b => b.onclick = () => { pulse.at = Math.max(0, pulse.at + Number(b.dataset.pat) * RULES.emitStep); refresh(); });
   el.querySelectorAll<HTMLButtonElement>('[data-amp]').forEach(b => b.onclick = () => { pulse.amplitude = Number(b.dataset.amp); refresh(); });
   const dial = el.querySelector<HTMLInputElement>('#phase-dial'); if (dial) dial.oninput = () => { pulse.phase = Number(dial.value); renderInspector(); el.querySelector<HTMLInputElement>('#phase-dial')?.focus(); };
-  const hyp = el.querySelector<HTMLSelectElement>('#hyp'); if (hyp) hyp.onchange = () => { pulse.hyp = Number(hyp.value); const hs = hypotheses(pulse.target)[pulse.hyp]; if (hs) pulse.at = Math.max(pulse.at, Math.floor((hs.arrive - distance(plan!.positionAt('blue-phaser', pulse.at), pulse.target)) / .25) * .25); refresh(); };
-  const add = el.querySelector<HTMLButtonElement>('#add-pulse'); if (add) add.onclick = () => addAction(selectedId!, { type: 'pulse', at: pulse.at, target: { ...pulse.target }, channel: 'red', phase: pulse.phase, amplitude: pulse.amplitude });
+  const hyp = el.querySelector<HTMLSelectElement>('#hyp'); if (hyp) hyp.onchange = () => { pulse.hyp = Number(hyp.value); pulse.align = true; refresh(); };
+  const add = el.querySelector<HTMLButtonElement>('#add-pulse'); if (add) add.onclick = () => { addAction(selectedId!, { type: 'pulse', at: pulse.at, target: { ...pulse.target }, channel: 'red', phase: pulse.phase, amplitude: pulse.amplitude }); pulse.hyp++; pulse.align = true; refresh(); };
 }
 
 // ── wave scene ───────────────────────────────────────────────────────────
@@ -527,4 +549,6 @@ start({ ai: 2 });
 showTitle();
 void HEX;
 
-if (import.meta.env.DEV) Object.assign(window, { hikari: { get match() { return match; }, get k() { return k; }, get drafts() { return drafts; }, project: (p: Point) => bf.projectNode(p), start, commit, setMode } });
+if (import.meta.env.DEV) Object.assign(window, { hikari: { get match() { return match; }, get k() { return k; }, get drafts() { return drafts; }, project: (p: Point) => bf.projectNode(p), start, commit, setMode, order: addAction, select(id: string) { selectedId = id; refresh(); },
+  /** QA: resolve rounds synchronously (rAF does not run in hidden panes). */
+  fast(rounds = 99) { for (let i = 0; i < rounds && match && match.phase !== 'finished'; i++) { if (!resolving) commit(); match.resolveTo(match.roundEnd); resolving = false; cursor = match.now; playCues(); } recompute(); if (match?.phase === 'finished') showResult(); return match?.now; } } });

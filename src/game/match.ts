@@ -61,7 +61,7 @@ export class Match {
   /** Advance during the resolving animation; returns true when the round is over. */
   resolveTo(t: number): boolean {
     if (this.phase !== 'resolving') return true
-    const target = Math.min(t, this.roundEnd)
+    const target = Math.max(this.#sim.t, Math.min(t, this.roundEnd))
     this.#sim.advanceTo(target)
     if (this.#sim.t >= this.roundEnd - 1e-9) {
       if (this.#sim.finished) this.phase = 'finished'
@@ -78,7 +78,7 @@ export class Match {
     if (!sim) return null
     if (this.trial) return this.trial.judge(sim)
     const { blue, red } = sim.score
-    return { ok: blue > red, line: blue > red ? '승리' : blue === red ? '무승부' : '패배', blue, red }
+    return { ok: blue > red, line: 'ORIGIN I ' + blue + ' : ' + red + ' ORIGIN II', blue, red }
   }
   static teamColor(team: Team) { return team === 'blue' ? 'var(--blue)' : 'var(--red)' }
 }
