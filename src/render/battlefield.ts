@@ -105,7 +105,7 @@ export class Battlefield {
       fragmentShader: `uniform vec3 tint; uniform float now; varying vec3 w; varying float h;
         void main(){ if(w.x<-.02||w.x>8.02||w.z<-.02||w.z>8.02) discard;
           float bands = .5+.5*cos(h*40.-now*3.);
-          float a = (.05 + .05*bands) * (1.-h*.6);
+          float a = (.07 + .07*bands) * (1.-h*.5);
           gl_FragColor = vec4(tint, a);
           #include <colorspace_fragment>
         }`,
@@ -250,7 +250,16 @@ export class Battlefield {
       this.cone.position.set(O.x, yy(k.t), O.z);
       this.cone.scale.set(depth, Math.max(1e-3, depth * this.h * u), depth);
       this.cone.material.uniforms.now.value = this.clock;
-      for (let d = 1; d <= depth; d += 1) st.ring(O, yy(k.t - d), d, HEX.blue, (d % 2 ? .1 : .22) * u, { clip: true });
+      for (let d = 1; d <= depth; d += 1) st.ring(O, yy(k.t - d), d, HEX.blue, (d % 2 ? .14 : .3) * u, { clip: true });
+      // generators of the cone: null lines converging on the ORIGIN's present
+      for (let i = 0; i < 24; i++) {
+        const a = i / 24 * Math.PI * 2, top: V3 = [O.x, yy(k.t), O.z];
+        let d = depth; // clip each generator to the board
+        const dx = Math.cos(a), dz = Math.sin(a);
+        if (dx > 1e-6) d = Math.min(d, (8 - O.x) / dx); if (dx < -1e-6) d = Math.min(d, -O.x / dx);
+        if (dz > 1e-6) d = Math.min(d, (8 - O.z) / dz); if (dz < -1e-6) d = Math.min(d, -O.z / dz);
+        bd.segment(top, [O.x + dx * d, yy(k.t - d), O.z + dz * d], HEX.blue, .22 * u);
+      }
       this.label('PAST LIGHT CONE', { x: O.x + depth * .5, z: O.z + depth * .62 }, yy(k.t - depth * .62), 'cone');
     }
 
@@ -301,7 +310,13 @@ export class Battlefield {
         for (let dt = 0; dt <= FUTURE + PAST; dt += 1) {
           const at = unit.seenAt + dt; if (at > s.t + FUTURE || at > k.duration) break;
           const rr = possibilityRadius(unit, at); if (rr <= .01) continue;
-          st.ring(unit.pos, yy(at), rr, hex, (at <= s.t ? .2 : .1) * u, { clip: true, dash: at > s.t ? 1 : 0 });
+          st.ring(unit.pos, yy(at), rr, hex, (at <= s.t ? .26 : .14) * u, { clip: true, dash: at > s.t ? 1 : 0 });
+        }
+        if (unit.kind === 'courier') for (let i = 0; i < 12; i++) { // 0.8c cone generators
+          const a = i / 12 * Math.PI * 2, t1 = Math.min(s.t + FUTURE, k.duration), r1 = possibilityRadius(unit, t1);
+          const e: V3 = [unit.pos.x + Math.cos(a) * r1, yy(t1), unit.pos.z + Math.sin(a) * r1];
+          if (e[0] < 0 || e[0] > 8 || e[2] < 0 || e[2] > 8) continue;
+          bd.segment([unit.pos.x, yy(unit.seenAt), unit.pos.z], e, HEX.red, .16 * u, .2);
         }
       } else if (r > .02) {
         st.ring(unit.pos, .06, r, hex, .42, { clip: true, dash: 1 });
@@ -415,7 +430,7 @@ export class Battlefield {
     const viewH = Math.max(9.2 + this.unfold * 3.6, 13.2 / aspect) / this.zoomFactor;
     this.camera.top = viewH / 2; this.camera.bottom = -viewH / 2; this.camera.left = -viewH * aspect / 2; this.camera.right = viewH * aspect / 2;
     const omni = this.state?.k.omniscient ? -2.6 : 1.0;
-    const aim = new T.Vector3(4, .1 + this.unfold * omni, 4).add(this.pan), e = this.elevation - this.unfold * .2;
+    const aim = new T.Vector3(4, .1 + this.unfold * omni, 4).add(this.pan), e = this.elevation - this.unfold * .26;
     this.camera.position.copy(aim).add(new T.Vector3(40 * Math.sin(this.yaw) * Math.cos(e), 40 * Math.sin(e), 40 * Math.cos(this.yaw) * Math.cos(e)));
     this.camera.lookAt(aim); this.camera.updateProjectionMatrix(); this.camera.updateMatrixWorld();
   }
