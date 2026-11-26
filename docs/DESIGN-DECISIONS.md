@@ -72,6 +72,14 @@ The board dissolves into a precise frame in the TIME view so the past cone below
 the present is visible. Worldlines, null lines and packets are screen-space fat
 lines with additive blending (light adds). Own plan = gold translucent ghosts.
 
+## D9. SKEW — rhythm counterplay (0.2.1)
+
+A courier on a producing NEXUS may delay its next packet by 0.5/1/1.5 s. Bot data
+showed a PHASER reading a perfectly periodic stream was near-unanswerable (0.65
+eclipses/pulse; the redundant route costs 33 % production). SKEW is cheap, costs
+real production time, and turns jamming into an information duel: the change is
+only visible to the jammer after the light delay. See `docs/PLAYTEST-LOG.md`.
+
 ## Open
 
 - Balance numbers (5 s calibration, 3 s production, amplitude set) are hypotheses

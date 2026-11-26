@@ -60,8 +60,14 @@ function toast(msg: string) {
 }
 
 // ── match lifecycle ──────────────────────────────────────────────────────
+// ── playtest telemetry (local only; exported on request from the result screen) ──
+interface RoundLog { round: number; t: number; planMs: number; timeViewMs: number; waveViewMs: number; packets: number; actions: number }
+let tele = { rounds: [] as RoundLog[], undos: 0, planStart: performance.now(), modeSince: performance.now(), timeMs: 0, waveMs: 0 };
+function teleMode(next: ViewMode) { const now = performance.now(); if (!resolving) { if (mode === 'time') tele.timeMs += now - tele.modeSince; if (mode === 'wave') tele.waveMs += now - tele.modeSince; } tele.modeSince = now; void next; }
+
 function start(opts: { ai?: AILevel; trial?: Trial }) {
-  match = new Match(opts.trial?.def ?? SKIRMISH, opts);
+  match = new Match(opts.trial?.def ?? SKIRMISH, { ...opts, seed: (Math.random() * 2 ** 31) >>> 0 });
+  tele = { rounds: [], undos: 0, planStart: performance.now(), modeSince: performance.now(), timeMs: 0, waveMs: 0 };
   drafts = []; undo = []; redo = []; reveal = false; resolving = false;
   selectedId = opts.trial?.def.units.find(u => u.team === 'blue' && u.kind !== 'origin')?.id ?? 'blue-courier-a';
   cursor = match.now; mode = 'space'; speed = 0.6;
@@ -85,6 +91,9 @@ function commit() {
   const ps = packetsOf(drafts.filter(d => d.actions.length));
   try { match.commit(ps); }
   catch (e) { toast('송신 불가: ' + String((e as Error).message)); return; }
+  teleMode(mode);
+  tele.rounds.push({ round: match.round, t: match.roundStart, planMs: Math.round(performance.now() - tele.planStart), timeViewMs: Math.round(tele.timeMs), waveViewMs: Math.round(tele.waveMs), packets: ps.length, actions: ps.reduce((n, p) => n + p.actions.length, 0) });
+  tele.timeMs = tele.waveMs = 0;
   sound.unlock(); if (ps.length) sound.commit();
   drafts = []; undo = []; redo = [];
   resolving = true; lastTick = performance.now();
@@ -97,7 +106,7 @@ function tick(now: number) {
     const done = match.resolveTo(match.now + dt * rate);
     cursor = match.now;
     if (done) {
-      resolving = false;
+      resolving = false; tele.planStart = tele.modeSince = performance.now();
       if (match.phase === 'finished') { recompute(); setTimeout(showResult, 900); }
       else recompute();
     } else refresh(false);
@@ -277,6 +286,7 @@ function actionText(a: Action) {
   if (a.type === 'move') return '이동 ' + xy(a.to) + ' · ' + a.speed + 'c';
   if (a.type === 'wait') return '대기 ' + a.seconds + 's (고유시간)';
   if (a.type === 'route') return '경로 ' + ({ direct: '직행', relay: '중계', redundant: '이중' }[a.policy]) + (a.via ? ' via ' + xy(a.via) : '');
+  if (a.type === 'skew') return '리듬 지연 +' + a.seconds + 's (다음 패킷)'
   return '펄스 T' + f2(a.at) + ' → ' + xy(a.target) + ' · ' + a.phase + '° · A' + a.amplitude;
 }
 
@@ -328,8 +338,8 @@ function ownPanel(u: SeenUnit) {
   const ready = u.kind === 'courier' ? p.readinessAt(u.id, Math.max(cursor, m.now)) : 1;
   s += rows([['보이는 위치', xy(u.pos)], ['계획 위치 @T' + f2(cursor), xy(pos), 'gold'], ['계획 고유시간 τ', f2(p.tauAt(u.id, cursor)) + 's'], ...(u.kind === 'courier' ? [['보정 (계획)', Math.round(ready * 100) + '%']] as [string, string][] : [])]);
   // upcoming plan events for this unit
-  const evs = p.log.filter(e => e.t > m.now - 1e-9 && (e.unitId === u.id) && ['cmd-recv', 'move', 'arrive', 'ready', 'pulse', 'pulse-fail', 'invalid', 'route'].includes(e.kind)).slice(0, 7);
-  const KIND: Record<string, string> = { 'cmd-recv': '명령 도달', move: '이동 시작', arrive: '도착', ready: '보정 완료', pulse: '펄스 발신', 'pulse-fail': '펄스 실패', invalid: '무효 행동', route: '경로 설정' };
+  const evs = p.log.filter(e => e.t > m.now - 1e-9 && (e.unitId === u.id) && ['cmd-recv', 'move', 'arrive', 'ready', 'pulse', 'pulse-fail', 'invalid', 'route', 'skew'].includes(e.kind)).slice(0, 7);
+  const KIND: Record<string, string> = { skew: '리듬 지연', 'cmd-recv': '명령 도달', move: '이동 시작', arrive: '도착', ready: '보정 완료', pulse: '펄스 발신', 'pulse-fail': '펄스 실패', invalid: '무효 행동', route: '경로 설정' };
   if (evs.length) s += '<div class="sect">계획된 미래 <span>PLAN</span></div>' + rows(evs.map(e => [KIND[e.kind] + (e.kind === 'pulse-fail' ? ' (' + e.info?.reason + ')' : ''), 'T' + f2(e.t), e.kind.includes('fail') || e.kind === 'invalid' ? 'bad' : '']));
   if (u.kind === 'courier') {
     const end = p.legs(u.id).at(-1)?.to ?? p.unitDef(u.id)!.at;
@@ -350,7 +360,8 @@ function ownPanel(u: SeenUnit) {
     }));
   }
   s += '<div class="sect">행동 추가</div><div class="btnrow"><button class="btn" data-wait="1">+ 대기 1s</button><button class="btn" data-wait="2">+ 대기 2s</button>';
-  if (u.kind === 'courier') s += '</div><div class="sect">데이터 경로 (넥서스 위에서)</div><div class="btnrow">' + (['direct', 'relay', 'redundant'] as RoutePolicy[]).map(r => '<button class="btn" data-route="' + r + '">' + { direct: '직행', relay: '중계', redundant: '이중 (4.5s)' }[r] + '</button>').join('');
+  if (u.kind === 'courier') s += '</div><div class="sect">리듬 지연 SKEW (생산 중일 때)</div><div class="btnrow">' + [0.5, 1, 1.5].map(x => '<button class="btn" data-skew="' + x + '" title="다음 데이터 생성을 늦춰 적의 위상 매복을 빗나가게 합니다">+' + x + 's</button>').join('') + '</div><p class="note">적은 당신의 리듬을 빛으로 읽어 매복합니다. 지연은 그 빛이 적에게 닿을 때까지 들키지 않습니다.</p><div class="btnrow" style="display:none">'
+  + '</div><div class="sect">데이터 경로 (넥서스 위에서)</div><div class="btnrow">' + (['direct', 'relay', 'redundant'] as RoutePolicy[]).map(r => '<button class="btn" data-route="' + r + '">' + { direct: '직행', relay: '중계', redundant: '이중 (4.5s)' }[r] + '</button>').join('');
   s += '</div>';
   if (u.kind === 'phaser') s += pulsePanel(u);
   return s;
@@ -430,6 +441,7 @@ function bindInspector() {
   const el = $('inspector');
   el.querySelectorAll<HTMLButtonElement>('[data-speed]').forEach(b => b.onclick = () => { speed = Number(b.dataset.speed) as Speed; refresh(); });
   el.querySelectorAll<HTMLButtonElement>('[data-wait]').forEach(b => b.onclick = () => addAction(selectedId!, { type: 'wait', seconds: Number(b.dataset.wait) }));
+  el.querySelectorAll<HTMLButtonElement>('[data-skew]').forEach(b => b.onclick = () => addAction(selectedId!, { type: 'skew', seconds: Number(b.dataset.skew) }));
   el.querySelectorAll<HTMLButtonElement>('[data-route]').forEach(b => b.onclick = () => {
     const policy = b.dataset.route as RoutePolicy;
     const relay = plan?.unitDef('blue-relay');
@@ -508,14 +520,34 @@ function showResult() {
     + '<div class="en">' + esc(v.line) + '</div>'
     + '<table><tr><td>수신 데이터 (청 / 적)</td><td>' + sim.score.blue + ' / ' + sim.score.red + '</td></tr><tr><td>생성 데이터</td><td>' + c('data-emit', 'blue') + ' / ' + c('data-emit', 'red') + '</td></tr><tr><td>소멸 (일식)</td><td>' + c('data-fail', 'blue') + ' / ' + c('data-fail', 'red') + '</td></tr><tr><td>펄스 발신</td><td>' + c('pulse', 'blue') + ' / ' + c('pulse', 'red') + '</td></tr><tr><td>송신한 명령</td><td>' + c('cmd-emit', 'blue') + ' / ' + c('cmd-emit', 'red') + '</td></tr></table>'
     + '<p class="note">이제 처음으로 양측의 실제 세계선을 볼 수 있습니다. 당신이 몰랐던 것을 확인하세요.</p>'
-    + '<div class="row"><button class="btn primary" id="reveal">진실 공개 (시공간)</button><button class="btn" id="again">다시</button><button class="btn" id="menu">메뉴</button></div></div>';
+    + '<div class="row"><button class="btn primary" id="reveal">진실 공개 (시공간)</button><button class="btn" id="again">다시</button><button class="btn" id="menu">메뉴</button><button class="btn" id="log" title="밸런스 조정용 플레이 기록 (JSON) — 브라우저 밖으로 전송되지 않습니다">기록 저장</button></div></div>';
   $('reveal').onclick = () => { reveal = true; mode = 'time'; cursor = sim.t; o.hidden = true; refresh(); };
   $('again').onclick = () => (m.trial ? showBriefing(m.trial) : start({ ai: m.aiLevel }));
   $('menu').onclick = showTitle;
+  $('log').onclick = () => exportLog();
+}
+function buildLog() {
+  const m = match!, sim = m.reveal()!;
+  const kinds = ['cmd-emit', 'cmd-recv', 'move', 'ready', 'control', 'data-emit', 'data-recv', 'data-fail', 'score', 'pulse', 'pulse-fail', 'skew', 'route', 'invalid'];
+  const log = {
+    game: '光', build: __BUILD__, rules: RULES, scenario: m.def.id, trial: m.trial?.id ?? null, ai: m.aiLevel ?? null, seed: m.seed,
+    verdict: m.verdict(), score: sim.score, telemetry: { undos: tele.undos, rounds: tele.rounds },
+    orders: { blue: m.history, red: m.redOrders() },
+    events: sim.log.filter(e => kinds.includes(e.kind)).map(e => ({ t: +e.t.toFixed(4), kind: e.kind, team: e.team, unit: e.unitId ?? e.nexusId ?? null, info: e.info ?? null })),
+  };
+  return log;
+}
+function exportLog() {
+  const m = match!, log = buildLog();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(log, null, 1)], { type: 'application/json' }));
+  a.download = 'hikari-' + (m.trial?.id ?? 'skirmish-ai' + m.aiLevel) + '-' + new Date().toISOString().slice(0, 16).replace(/[:T]/g, '') + '.json';
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 
 // ── controls ─────────────────────────────────────────────────────────────
 function setMode(next: ViewMode) {
+  teleMode(next);
   if (next === 'time' && mode !== 'time') { sound.unfold(); if (firstUnfold) { firstUnfold = false; toast('세로축은 시간입니다. 모든 실체는 당신의 과거 빛원뿔 위에 있습니다.'); } }
   mode = next; refresh();
 }
@@ -538,7 +570,7 @@ document.addEventListener('keydown', e => {
   else if (e.key.toLowerCase() === 'r' && !e.ctrlKey) bf.resetCamera();
   else if (e.key.toLowerCase() === 'q' || e.key.toLowerCase() === 'e') { if (!resolving) { cursor = Math.max(0, Math.min(match.def.duration, cursor + (e.key.toLowerCase() === 'q' ? -1 : 1))); refresh(); } }
   else if (e.key === 'Escape') { if (pulse.picking) { pulse.picking = false; refresh(); } else if (selectedId) { selectedId = null; refresh(); } else showTitle(); }
-  else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); const u = undo.pop(); if (u) { redo.push(JSON.stringify(drafts)); drafts = JSON.parse(u); recompute(); } }
+  else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); const u = undo.pop(); if (u) { tele.undos++; redo.push(JSON.stringify(drafts)); drafts = JSON.parse(u); recompute(); } }
   else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); const r = redo.pop(); if (r) { undo.push(JSON.stringify(drafts)); drafts = JSON.parse(r); recompute(); } }
   else if (e.key === 'Tab') { e.preventDefault(); const own = k.units.filter(u => u.team === 'blue' && u.kind !== 'origin').map(u => u.id); const i = own.indexOf(selectedId ?? ''); selectedId = own[(i + 1) % own.length] ?? null; refresh(); }
 });
@@ -549,6 +581,6 @@ start({ ai: 2 });
 showTitle();
 void HEX;
 
-if (import.meta.env.DEV) Object.assign(window, { hikari: { get match() { return match; }, get k() { return k; }, get drafts() { return drafts; }, project: (p: Point) => bf.projectNode(p), start, commit, setMode, order: addAction, select(id: string) { selectedId = id; refresh(); },
+if (import.meta.env.DEV) Object.assign(window, { hikari: { get match() { return match; }, get k() { return k; }, get drafts() { return drafts; }, project: (p: Point) => bf.projectNode(p), start, commit, setMode, order: addAction, buildLog, select(id: string) { selectedId = id; refresh(); },
   /** QA: resolve rounds synchronously (rAF does not run in hidden panes). */
   fast(rounds = 99) { for (let i = 0; i < rounds && match && match.phase !== 'finished'; i++) { if (!resolving) commit(); match.resolveTo(match.roundEnd); resolving = false; cursor = match.now; playCues(); } recompute(); if (match?.phase === 'finished') showResult(); return match?.now; } } });

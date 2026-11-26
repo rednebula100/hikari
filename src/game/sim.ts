@@ -13,7 +13,7 @@ export type Speed = 0.4 | 0.6 | 0.8
 export type RoutePolicy = 'direct' | 'relay' | 'redundant'
 export const enemyOf = (team: Team): Team => (team === 'blue' ? 'red' : 'blue')
 
-export const RULES = Object.freeze({
+export const RULES = {
   readyProper: 5,          // courier sensor calibration after a move starts (proper s)
   produce: 3,              // NEXUS production period (s)
   produceRedundant: 4.5,   // period when duplicating over the relay
@@ -29,7 +29,13 @@ export const RULES = Object.freeze({
   speeds: [0.4, 0.6, 0.8] as readonly Speed[],
   amplitudes: [0.5, 1, 2] as readonly number[],
   phaseStep: 15,           // degrees
-})
+}
+/** Balance tooling only: run `fn` with temporarily patched rules. */
+export function withRules<T>(patch: Partial<typeof RULES>, fn: () => T): T {
+  const saved = { ...RULES }
+  Object.assign(RULES, patch)
+  try { return fn() } finally { Object.assign(RULES, saved) }
+}
 
 export const ORIGIN: Readonly<Record<Team, Point>> = Object.freeze({ blue: { x: 0, z: 4 }, red: { x: 8, z: 4 } })
 
@@ -39,13 +45,15 @@ export type Action =
   | { type: 'move'; to: Point; speed: Speed }
   | { type: 'wait'; seconds: number }
   | { type: 'route'; policy: RoutePolicy; via?: Point }
+  /** Courier on a producing NEXUS: delay its next packet (breaks a predictable rhythm). */
+  | { type: 'skew'; seconds: number }
   | { type: 'pulse'; at: number; target: Point; channel: Team; phase: number; amplitude: number }
 
 export interface Packet { id: string; team: Team; unitId: string; emit: number; seq: number; actions: Action[] }
 
 export type EventKind =
   | 'cmd-emit' | 'cmd-recv' | 'cmd-stale' | 'move' | 'arrive' | 'ready' | 'wait' | 'invalid'
-  | 'route' | 'pulse' | 'pulse-fail' | 'control' | 'data-emit' | 'data-recv' | 'data-fail'
+  | 'route' | 'skew' | 'pulse' | 'pulse-fail' | 'control' | 'data-emit' | 'data-recv' | 'data-fail'
   | 'relay-emit' | 'score'
 
 export interface SimEvent {
@@ -171,6 +179,7 @@ export class Sim {
     for (const a of packet.actions) {
       if (a.type === 'move' && (!isNode(a.to) || !RULES.speeds.includes(a.speed))) return 'move'
       if (a.type === 'wait' && !(a.seconds > 0 && a.seconds <= 48)) return 'wait'
+      if (a.type === 'skew' && (unit.def.kind !== 'courier' || !(a.seconds > 0 && a.seconds <= 3))) return 'skew'
       if (a.type === 'route' && (unit.def.kind !== 'courier' || (a.policy !== 'direct' && !(a.via && isNode(a.via))))) return 'route'
       if (a.type === 'pulse' && (unit.def.kind !== 'phaser' || !isNode(a.target) || !RULES.amplitudes.includes(a.amplitude)
         || !Number.isFinite(a.at) || !Number.isFinite(a.phase))) return 'pulse'
@@ -317,6 +326,15 @@ export class Sim {
         nexus.policy[team] = { mode: a.policy, ...(a.via ? { via: { ...a.via } } : {}) }
         if (nexus.controller === team || nexus.controller === 'contested') nexus.since = t
         this.#emit({ t, kind: 'route', pos, team, unitId: u.def.id, nexusId: nexus.def.id, info: { policy: a.policy } })
+        continue
+      }
+      if (a.type === 'skew') {
+        u.queue.shift()
+        const nexus = [...this.#nexus.values()].find(n => samePoint(n.def.at, pos))
+        const team = u.def.team as Team
+        if (!nexus || !(nexus.controller === team || nexus.controller === 'contested')) { this.#emit({ t, kind: 'invalid', pos, team, unitId: u.def.id, info: { reason: 'not-producing' } }); continue }
+        nexus.since += a.seconds
+        this.#emit({ t, kind: 'skew', pos, team, unitId: u.def.id, nexusId: nexus.def.id, info: { seconds: a.seconds } })
         continue
       }
       // pulse

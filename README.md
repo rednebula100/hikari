@@ -39,7 +39,7 @@ npm install
 npm run dev      # http://127.0.0.1:5173
 npm test         # physics, engine, information isolation, trial solutions, AI determinism
 npm run build
-npx tsx tools/selfplay.ts   # AI-vs-AI diagnostics
+npx tsx tools/balance.ts 20      # seeded AI-vs-AI balance matrix (also: sweep, ties)
 ```
 
 Architecture: `src/game` is a headless deterministic event engine (truth),

@@ -17,12 +17,15 @@ export class Match {
   roundStart: number
   #seq = 0
 
-  constructor(def: ScenarioDef, opts: { ai?: AILevel; trial?: Trial } = {}) {
+  readonly seed: number
+
+  constructor(def: ScenarioDef, opts: { ai?: AILevel; trial?: Trial; seed?: number } = {}) {
+    this.seed = opts.seed ?? 1
     this.def = def
     this.trial = opts.trial
     this.#sim = new Sim(def)
     for (const p of opts.trial?.redScript ?? []) this.#sim.submit(p)
-    if (opts.ai) this.#ai = newAI('red', opts.ai)
+    if (opts.ai) this.#ai = newAI('red', opts.ai, this.seed)
     const start = opts.trial?.start ?? 0
     if (start > 0) this.#sim.advanceTo(start)
     this.roundStart = start
@@ -80,5 +83,7 @@ export class Match {
     const { blue, red } = sim.score
     return { ok: blue > red, line: 'ORIGIN I ' + blue + ' : ' + red + ' ORIGIN II', blue, red }
   }
+  /** Post-match only: the opponent's orders, for logs and replays. */
+  redOrders(): Packet[] { return this.phase === 'finished' ? structuredClone(this.#ai?.history ?? this.trial?.redScript ?? []) : [] }
   static teamColor(team: Team) { return team === 'blue' ? 'var(--blue)' : 'var(--red)' }
 }

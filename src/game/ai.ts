@@ -8,8 +8,10 @@ import { planSim, readyAfterMove } from './plan.ts'
 export type AILevel = 1 | 2 | 3
 export const AI_NAMES: Record<AILevel, string> = { 1: '관측자', 2: '계산자', 3: '예언자' }
 
-export interface AIState { team: Team; level: AILevel; history: Packet[]; seq: number; rng: number }
-export const newAI = (team: Team, level: AILevel, seed = 1): AIState => ({ team, level, history: [], seq: 0, rng: (seed * 2654435761) >>> 0 })
+export interface AIState { team: Team; level: AILevel; history: Packet[]; seq: number; rng: number
+  /** Enemy emission each ambush was planned from, per NEXUS (rhythm anchor). */
+  anchors: Record<string, number>; skewed: Record<string, number> }
+export const newAI = (team: Team, level: AILevel, seed = 1): AIState => ({ team, level, history: [], seq: 0, rng: (seed * 2654435761) >>> 0, anchors: {}, skewed: {} })
 /** mulberry32: deterministic per-match temperament (recorded seed ⇒ reproducible). */
 function rand(st: AIState) {
   st.rng = (st.rng + 0x6D2B79F5) >>> 0
@@ -95,20 +97,23 @@ export function aiRound(def: ScenarioDef, k: Knowledge, st: AIState): Packet[] {
     out.push(packet(id, [{ type: 'move', to: best.node, speed: best.speed }]))
   }
 
-  // ── 2. Level 3: defend eclipsed links with a redundant relay route ──────
+  // ── 2. Level 3: break a predictable rhythm once it gets eclipsed ──────
   if (st.level >= 3 && out.length < RULES.packetsPerRound) {
-    const fails = k.events.filter(e => e.kind === 'data-fail' && e.team === team && e.info?.reason === 'eclipsed' && e.t > now - 10)
-    const relayId = team + '-relay'
-    const relayNode = settle.get(relayId)?.node ?? positionAt(plan.unitDef(relayId)?.at ?? O, plan.legs(relayId), def.duration)
-    if (fails.length && plan.unitDef(relayId)) {
-      for (const id of couriers) {
-        const s = settle.get(id)!, n = nexus.find(n => samePoint(n.pos, s.node))
-        if (!n || pendingOrders(id)) continue
-        const already = st.history.some(p => p.unitId === id && p.actions.some(a => a.type === 'route'))
-        if (already) continue
-        out.push(packet(id, [{ type: 'route', policy: 'redundant', via: relayNode }]))
-        break
-      }
+    // a failure at our own ORIGIN is known instantly; its NEXUS emission is visible by then too
+    const fails = k.events.filter(e => e.kind === 'data-fail' && e.team === team && e.info?.reason === 'eclipsed' && e.t > now - 6)
+    const targets = fails.map(f => k.events.find(e => e.kind === 'data-emit' && e.dataId === f.dataId)?.nexusId)
+    // pre-emptive: an enemy pulse aimed at our core was seen → shake the rhythm of a producing NEXUS
+    const ambush = k.events.some(e => e.kind === 'pulse' && e.team === enemy && e.t > now - 8 && e.info?.targetX === O.x && e.info?.targetZ === O.z)
+    if (ambush) for (const n of nexus) if (n.controller === team || n.controller === 'contested') targets.push(n.id)
+    for (const id of targets) {
+      if (out.length >= RULES.packetsPerRound) break
+      const n = nexus.find(x => x.id === id)
+      if (!n || (st.skewed[n.id] ?? -99) > now - 5) continue
+      const holder = couriers.find(id => samePoint(settle.get(id)!.node, n.pos) && settle.get(id)!.at <= now)
+      if (!holder || pendingOrders(holder)) continue
+      st.skewed[n.id] = now
+      const seconds = [0.5, 1, 1.5][Math.floor(rand(st) * 3)]
+      out.push(packet(holder, [{ type: 'skew', seconds }]))
     }
   }
 
@@ -120,6 +125,13 @@ export function aiRound(def: ScenarioDef, k: Knowledge, st: AIState): Packet[] {
     const restAt = legs.at(-1)?.end ?? 0
     const pos = positionAt(def0.at, legs, def.duration)
     const futurePulses = st.history.some(p => p.unitId === phaserId && p.actions.some(a => a.type === 'pulse' && a.at > now))
+    // level 3 notices when the observed rhythm no longer matches its ambush and re-plans
+    const rhythmBroken = () => nexus.some(n => {
+      const last = n.emissions.filter(e => e.team === enemy).at(-1), anchor = st.anchors[n.id]
+      if (!last || anchor === undefined || last.t <= anchor) return false
+      const r = ((last.t - anchor) % RULES.produce + RULES.produce) % RULES.produce
+      return r > 0.05 && r < RULES.produce - 0.05
+    })
     // Data amplitude at the enemy core from the central and flank nexus (~0.29–0.33).
     // Data amplitude at the enemy core: centre NEXUS att(4)=0.333, flanks att(5)=0.286.
     const good = (node: Point) => RULES.amplitudes.some(A => { const j = A * attenuation(distance(node, target)); return j > 0.8 * attenuation(4) && j < 1.25 * attenuation(5) })
@@ -133,7 +145,7 @@ export function aiRound(def: ScenarioDef, k: Knowledge, st: AIState): Packet[] {
         if (c < cost) { cost = c; stage = node }
       }
       if (stage) out.push(packet(phaserId, [{ type: 'move', to: stage, speed: 0.6 }]))
-    } else if (!futurePulses) {
+    } else if (!futurePulses || (st.level >= 3 && rhythmBroken())) {
       const arriveCmd = Math.max(now + distance(O, pos), restAt)
       const dS = distance(pos, target)
       const predictions: { aD: number; amp: number }[] = []
@@ -142,7 +154,9 @@ export function aiRound(def: ScenarioDef, k: Knowledge, st: AIState): Packet[] {
         const em = n.emissions.filter(e => e.team === enemy)
         const last = em.at(-1)
         if (!last) continue
-        const period = em.length >= 2 ? Math.max(RULES.produce, em.at(-1)!.t - em.at(-2)!.t) : RULES.produce
+        const gaps = em.slice(-3).map((e, i, xs) => (i ? e.t - xs[i - 1].t : 0)).slice(1)
+        const period = gaps.length >= 2 && gaps.every(g => Math.abs(g - RULES.produceRedundant) < .05) ? RULES.produceRedundant : RULES.produce
+        st.anchors[n.id] = last.t
         for (let e = last.t + period; e < def.duration; e += period) predictions.push({ aD: e + distance(n.pos, target), amp: attenuation(distance(n.pos, target)) })
       }
       predictions.sort((a, b) => a.aD - b.aD)

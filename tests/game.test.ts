@@ -168,3 +168,22 @@ test('mirror symmetry: mirrored orders give mirrored scores', () => {
   s.advanceTo(48)
   assert.equal(s.score.blue, s.score.red)
 })
+
+test('SKEW delays the next packet of a producing NEXUS and is invalid elsewhere', () => {
+  const run = (skew: boolean) => {
+    const s = new Sim(SKIRMISH)
+    s.submit(pk('blue-courier-a', 0, [move(4, 4, 0.6)]))
+    if (skew) s.submit(pk('blue-courier-a', 10, [{ type: 'skew', seconds: 1.5 }]))
+    s.advanceTo(20)
+    return s.log.filter(e => e.kind === 'data-emit' && e.team === 'blue').map(e => e.t)
+  }
+  const plain = run(false), skewed = run(true)
+  // the order (emitted T10) reaches the courier at T14: the first packet is untouched
+  near(skewed[0], plain[0])
+  near(skewed[1], plain[1] + 1.5)
+  near(skewed[2] - skewed[1], 3)
+  const s = new Sim(SKIRMISH)
+  s.submit(pk('blue-courier-a', 0, [{ type: 'skew', seconds: 1 }]))
+  s.advanceTo(5)
+  assert.ok(s.log.some(e => e.kind === 'invalid' && e.info?.reason === 'not-producing'))
+})
