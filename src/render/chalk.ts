@@ -21,6 +21,8 @@ export class Chalk {
   private dirty = true;
   private grain: CanvasPattern | null = null;
   private get clock() { return performance.now(); }
+  /** Drawing speed multiplier (the aiming sketch draws fast so it is finished before the eye moves on). */
+  tempo = 1;
 
   constructor(y: number) {
     this.canvas.width = this.canvas.height = 2048;
@@ -47,7 +49,7 @@ export class Chalk {
 
   path(pts: P[], o: { color?: string; width?: number; dash?: number; delay?: number; dur?: number; alpha?: number } = {}) {
     this.strokes.push({ kind: 'path', pts, color: o.color ?? '#f3efe2', width: o.width ?? 0.07, dash: o.dash, alpha: o.alpha ?? 0.92,
-      t0: this.clock + (o.delay ?? 0), dur: o.dur ?? 220, seed: Math.random() * 1000 });
+      t0: this.clock + (o.delay ?? 0) / this.tempo, dur: (o.dur ?? 220) / this.tempo, seed: Math.random() * 1000 });
     this.dirty = true;
   }
   arrow(a: P, b: P, o: Parameters<Chalk['path']>[1] & { head?: number } = {}) {
@@ -55,7 +57,7 @@ export class Chalk {
     const ang = Math.atan2(b[1] - a[1], b[0] - a[0]), h = o.head ?? 0.28;
     const l: P = [b[0] - h * Math.cos(ang - 0.45), b[1] - h * Math.sin(ang - 0.45)];
     const r: P = [b[0] - h * Math.cos(ang + 0.45), b[1] - h * Math.sin(ang + 0.45)];
-    this.path([l, b, r], { ...o, dash: undefined, delay: (o.delay ?? 0) + (o.dur ?? 220) * 0.9, dur: 90 });
+    this.path([l, b, r], { ...o, dash: undefined, delay: (o.delay ?? 0) + (o.dur ?? 220) * 0.9, dur: o.dur === 0 ? 0 : 90 });
   }
   circle(c: P, r: number, o: Parameters<Chalk['path']>[1] = {}) {
     const pts: P[] = [];
@@ -68,7 +70,7 @@ export class Chalk {
   }
   text(text: string, at: P, o: { size?: number; color?: string; delay?: number; dur?: number; alpha?: number } = {}) {
     this.strokes.push({ kind: 'text', pts: [at], text, size: o.size ?? 0.42, color: o.color ?? '#f3efe2', width: 0, alpha: o.alpha ?? 0.95,
-      t0: this.clock + (o.delay ?? 0), dur: o.dur ?? 32 * text.length + 120, seed: 0 });
+      t0: this.clock + (o.delay ?? 0) / this.tempo, dur: (o.dur ?? 32 * text.length + 120) / this.tempo, seed: 0 });
     this.dirty = true;
   }
 

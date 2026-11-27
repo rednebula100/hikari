@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.1 — the lamp's UI, real tumbling, click-to-preview (2026-11-27)
+- **UI v3 「램프 아래의 실험대」** (replaces v2): derived from the scene's own materials — walnut cases with brass inlay and
+  corner guards, engraved brass nameplates, an ivory optical-bench ruler with a brass **rider** that glides to the item
+  (lists, tiers, segmented settings), wax seals, chalk formulas on slate, a graph-paper lab notebook for the tutorial,
+  glass microscope slides for problems, matted photographs for the codex. Warm = matter, cool strobe white = measured values.
+  Hahmlet is the one typeface (Nanum Pen for chalk/ink). No mono, no all-caps labels, no fake numbering.
+- **Loading**: six lathe-profile silhouettes are pushed onto a brass rail as the set loads, then a cradle ripple.
+- **Physics**: pieces leaving the board become Rapier rigid bodies (convex hulls of the real meshes) — over the frame,
+  onto the table, tumbling and rolling, wood-on-wood thuds; they stay until the next game. On the board: inertial lean
+  and impact rocking (damped spring), friction settle to the rounded square, push-shaped slides.
+- **Moves**: click a piece, click a target to preview (sketch 2.4× faster, no hover lag), click again to play.
+- Tutorial Esc menu cannot leave the notebook (unless it was finished before).
+- 衝 spin: mashing spins faster; every ten turns toggles the gradient; nothing persists.
+
 ## 0.5.0 — problem book, codex, UI v2 (2026-11-27)
 - **당구 문제** — 100 problems in ten tiers (★1 프록시마 M … ★10 WR 104), mined by `tools/gen-puzzles.ts` from random
   billiard layouts and endgames and solved exhaustively by the engine (★10 up to 77,256 sequences, one answer).

@@ -62,3 +62,42 @@ async function drain() { running = true; while (queue.length) await queue.shift(
 export function scramble(el: Element, text: string, dur = .9) {
   gsap.to(el, { duration: dur, scrambleText: { text, chars: '0123456789', revealDelay: dur * .4, speed: .6 }, ease: 'none' })
 }
+
+/**
+ * The optical-bench rider: a brass block on the ivory ruler beside every list glides to the item under the
+ * pointer (or keyboard focus) and returns to the current choice when the pointer leaves. Segmented choices get
+ * a rider on their horizontal ruler; it remembers where it was so a re-render still slides instead of jumping.
+ */
+const segMemo = new Map<string, { x: number; w: number }>()
+export function riders(root: ParentNode) {
+  root.querySelectorAll<HTMLElement>('.idx, .tiers').forEach(list => {
+    if (list.querySelector(':scope > .rider')) return
+    const items = [...list.querySelectorAll<HTMLElement>(':scope > .row, :scope > .tier')]
+    if (!items.length) return
+    const r = document.createElement('div'); r.className = 'rider'; r.innerHTML = '<i></i>'; list.prepend(r)
+    const place = (el: HTMLElement, anim: boolean) => {
+      const y = el.offsetTop + el.offsetHeight / 2 - 10
+      if (anim) gsap.to(r, { y, duration: .34, ease: 'power3.out', overwrite: true }); else gsap.set(r, { y })
+    }
+    const home = () => list.querySelector<HTMLElement>(':scope > .sel') ?? list.querySelector<HTMLElement>(':scope > .main') ?? items[0]
+    place(home(), false)
+    items.forEach(it => { it.addEventListener('pointerenter', () => place(it, true)); it.addEventListener('focus', () => place(it, true)) })
+    list.addEventListener('pointerleave', () => place(home(), true))
+  })
+  root.querySelectorAll<HTMLElement>('.seg').forEach(seg => {
+    const btns = [...seg.querySelectorAll<HTMLButtonElement>(':scope > button')]
+    if (!btns.length || seg.querySelector(':scope > .srider')) return
+    const r = document.createElement('i'); r.className = 'srider'; seg.append(r)
+    const key = btns.map(b => b.textContent).join('|')
+    const to = (b: HTMLElement, anim: boolean) => {
+      const v = { x: b.offsetLeft + 4, width: b.offsetWidth - 8 }
+      if (anim) gsap.to(r, { ...v, duration: .32, ease: 'power3.out', overwrite: true }); else gsap.set(r, v)
+    }
+    const on = () => seg.querySelector<HTMLElement>(':scope > button.on') ?? btns[0]
+    const was = segMemo.get(key)
+    if (was) { gsap.set(r, { x: was.x, width: was.w }); to(on(), true) } else to(on(), false)
+    segMemo.set(key, { x: on().offsetLeft + 4, w: on().offsetWidth - 8 })
+    btns.forEach(b => b.addEventListener('pointerenter', () => to(b, true)))
+    seg.addEventListener('pointerleave', () => to(on(), true))
+  })
+}

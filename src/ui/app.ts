@@ -8,7 +8,8 @@ import { sightings, belief, intentions, resolve, apply } from '../engine/fog';
 import { gamma } from '../engine/collide';
 import { Sound } from './audio';
 import { store, loadSettings, saveSettings, loadBook, saveBook, loadCodex, saveCodex, today, type Progress, type CodexState } from './store';
-import { gsap, toast, reveal, openPanel, stamp, discovery, scramble } from './fx';
+import { gsap, toast, reveal, openPanel, stamp, discovery, scramble, riders } from './fx';
+import { Loader } from './loader';
 import { intro } from './intro';
 import { ENTRIES, GROUPS, RARITY, byId, detect, newTally, type GameTally } from '../content/codex';
 import { targetMoves, targetStep, emptyTally, addTally, achieved, findMove, mated, defend, uci, type Puzzle, type Seal, type Tally } from '../content/puzzle';
@@ -114,15 +115,18 @@ function witness(before: Pos, out: Outcome, mover: Side) {
 // ── boot ────────────────────────────────────────────────────────────────
 async function boot() {
   clearScreen();
-  $('screen').innerHTML = '<div class="loading"><span class="lbl">실험실 준비 중</span><div class="bar"><i id="bar"></i></div></div>';
+  const loader = new Loader();
+  $('screen').className = 'boot'; $('screen').append(loader.el);
   stage.lampFlicker(false);
   stage.showPerf(settings.fps);
-  const loading = stage.load(f => { const b = document.getElementById('bar'); if (b) b.style.width = Math.round(f * 100) + '%'; }, settings.quality === 'ultra');
+  const loading = stage.load(f => loader.set(f * .96), settings.quality === 'ultra');
   const first = !store.get('v1:seenIntro');
   if (settings.intro === 'always' || first) { await intro(); store.set('v1:seenIntro', '1'); }
   try { await loading; }
-  catch (e) { $('screen').innerHTML = '<div class="loading"><span class="lbl">3D 체스 세트를 불러오지 못했습니다</span><p class="sub">' + String(e) + '</p></div>'; throw e; }
+  catch (e) { $('screen').innerHTML = '<div class="loader"><div class="cap2">3D 체스 세트를 불러오지 못했다 — 새로고침해 다시 시도하세요<br><small>' + String(e) + '</small></div></div>'; throw e; }
   await document.fonts?.ready;
+  await loader.finish();
+  await new Promise<void>(r => gsap.to(loader.el, { opacity: 0, y: 8, duration: .35, ease: 'power2.in', onComplete: () => r() }));
   stage.sync(pos);
   title(false);
 }
@@ -157,16 +161,16 @@ function showTitleMenu(instant: boolean) {
   $('screen').onclick = null;
   $('screen').className = '';
   const found = Object.keys(codex).length;
-  $('screen').innerHTML = '<div class="title2"><div class="eyebrow"><span class="lbl">COLLISION CHESS</span><span class="lbl">v0.5</span></div>'
+  $('screen').innerHTML = '<div class="title2">'
     + '<div class="mark' + (spins() >= 10 ? ' grad' : '') + '" id="t-mark">衝</div>'
-    + '<div class="motto">잡지 마라. 부딪쳐라.</div><div class="idx" id="t-idx" style="margin-top:34px">'
+    + '<div class="motto">잡지 마라. 부딪쳐라.</div><div class="idx" id="t-idx">'
     + row('t-start', '01', '대국', ({ clash: '衝', light: '光', classic: '클래식' }[variant]) + ' · ' + LEVEL_NAME[level], 'main')
-    + row('t-book', '02', '당구 문제', solvedCount() + ' / ' + PUZZLES.length)
-    + row('t-codex', '03', '현상 도감', found + ' / ' + ENTRIES.length)
-    + row('t-tut', '04', '실험 노트', tutorialDone() ? '완료' : '튜토리얼')
+    + row('t-book', '02', '당구 문제', solvedCount() + ' / ' + PUZZLES.length + ' 풀이')
+    + row('t-codex', '03', '현상 도감', found + ' / ' + ENTRIES.length + ' 발견')
+    + row('t-tut', '04', '실험 노트', tutorialDone() ? '다시 보기' : '처음이라면')
     + row('t-set', '05', '설정', '')
     + '</div></div>'
-    + '<div class="foot l"><span class="lbl">© RED NEBULA</span></div><div class="foot r"><button id="t-sound">' + (sound.muted ? '소리 켜기' : '소리 끄기') + '</button><button id="t-credits">크레딧</button></div>';
+    + '<div class="foot l"><span class="lbl">Red Nebula · v0.5</span></div><div class="foot r"><button id="t-sound">' + (sound.muted ? '소리 켜기' : '소리 끄기') + '</button><button id="t-credits">크레딧</button></div>';
   $('t-start').onclick = () => { sound.unlock(); if (tutorialDone()) matchSetup(); else { toast('처음이군요 — 실험 노트부터 펼칩니다'); controls(); } };
   $('t-book').onclick = () => { sound.unlock(); openBook(); };
   $('t-codex').onclick = () => { sound.unlock(); openCodex(); };
@@ -176,7 +180,13 @@ function showTitleMenu(instant: boolean) {
   $('t-credits').onclick = credits;
   $('t-mark').onclick = e => { e.stopPropagation(); spin($('t-mark'), $('t-mark')); };
   wireRows($('screen'));
-  if (!instant) { reveal($('screen')); gsap.fromTo('#t-mark', { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: .6, ease: 'expo.out' }); }
+  if (!instant) {
+    // the one orchestrated entrance: the brass glyph is lit, then the ruler and its entries slide out of the dark
+    gsap.timeline()
+      .fromTo('#t-mark', { opacity: 0, y: 14, filter: 'brightness(.3) drop-shadow(0 6px 10px rgba(0,0,0,.7))' }, { opacity: 1, y: 0, filter: 'brightness(1) drop-shadow(0 6px 10px rgba(0,0,0,.7))', duration: .9, ease: 'power3.out' })
+      .fromTo('.title2 .motto', { opacity: 0 }, { opacity: 1, duration: .5 }, '-=.4')
+      .fromTo('.title2 .idx', { opacity: 0, x: -12 }, { opacity: 1, x: 0, duration: .5, ease: 'power3.out' }, '-=.25');
+  }
 }
 function row(id: string, n: string, t: string, m: string, cls = '') {
   return '<button class="row ' + cls + '" id="' + id + '"><span class="n">' + n + '</span><span class="t">' + t + '</span><span class="m">' + m + '</span></button>';
@@ -188,35 +198,39 @@ function wireRows(root: HTMLElement) {
 function credits() {
   const back = screen === 'title' ? () => showTitleMenu(true) : clearScreen;
   $('screen').className = 'dim';
-  $('screen').innerHTML = '<div class="panel dlg"><div class="ph"><span class="lbl">크레딧</span><span class="lbl">DOC. 00</span></div><div class="pb"><div class="credits">'
+  $('screen').innerHTML = '<div class="panel dlg"><div class="ph"><span class="lbl">크레딧</span></div><div class="pb"><div class="credits">'
     + '<p><b>제작</b> — Red Nebula</p>'
     + '<p><b>체스 세트</b> — "A Beautiful Game", © 2020 ASWF (MaterialX Project), glTF 변환 © 2022 Ed Mackey. <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>, <a href="https://github.com/KhronosGroup/glTF-Sample-Assets" target="_blank" rel="noopener">Khronos glTF Sample Assets</a>.</p>'
-    + '<p><b>서체</b> — IBM Plex Sans KR · IBM Plex Mono · Noto Serif KR · Nanum Pen Script (SIL OFL 1.1).</p>'
-    + '<p><b>라이브러리</b> — three.js (MIT), GSAP (GreenSock 표준 라이선스, 무료), Draco & Basis Universal 디코더 (Apache-2.0). 규칙 검증 — chess.js (BSD-2).</p>'
-    + '<p><b>소리</b> — 전부 실시간 합성.</p></div><div class="idx">' + row('c-back', '←', '돌아가기', 'ESC') + '</div></div></div>';
+    + '<p><b>서체</b> — Hahmlet · Nanum Pen Script (SIL OFL 1.1).</p>'
+    + '<p><b>라이브러리</b> — three.js (MIT), Rapier 물리 (Apache-2.0), GSAP (GreenSock 표준 라이선스, 무료), Draco & Basis Universal 디코더 (Apache-2.0). 규칙 검증 — chess.js (BSD-2).</p>'
+    + '<p><b>소리</b> — 전부 실시간 합성.</p></div><div class="acts"><button class="btn" id="c-back">돌아가기 <span class="k">Esc</span></button></div></div></div>';
   openPanel($('screen').firstElementChild!);
   $('c-back').onclick = back;
 }
 
 // ── easter egg: 衝 turns over in 3D; ten turns and it burns ─────────────
-const spins = () => Number(store.get('v1:spins') || 0);
+// Not persisted: a refresh brings the plain 衝 back. Every ten turns toggles the gradient.
+let spinCount = 0, gradOn = false;
+const spins = () => (gradOn ? 10 : 0);
 function buildLogo() {
   const s = $('logo-spin');
   s.innerHTML = Array.from({ length: 7 }, (_, i) => '<div class="face' + (i ? ' d' : '') + '" style="transform:translateZ(' + (-i) + 'px)">衝</div>').join('');
-  $('logo').classList.toggle('grad', spins() >= 10);
+  $('logo').classList.toggle('grad', gradOn);
 }
-let spinAngle = 0;
+const spinTo = new WeakMap<HTMLElement, number>();
+/** Each click adds a full turn to the target angle; the tween always restarts from where the glyph is now,
+ *  so mashing piles up distance over the same short duration — it simply spins faster, never queues. */
 function spin(target: HTMLElement, gradHost: HTMLElement) {
   sound.unlock(); sound.whoosh();
-  spinAngle += 360;
-  gsap.to(target, { rotationY: spinAngle, duration: .9, ease: 'power3.inOut', transformPerspective: 500 });
-  const n = spins() + 1; store.set('v1:spins', String(n));
-  if (n === 10) {
-    setTimeout(() => {
-      $('flash').classList.remove('on'); void $('flash').offsetWidth; $('flash').classList.add('on');
-      gradHost.classList.add('grad'); $('logo').classList.add('grad');
-      void stamp('十', '十回轉 — 衝이 달아올랐다', () => sound.stamp());
-    }, 850);
+  const to = (spinTo.get(target) ?? 0) + 360; spinTo.set(target, to);
+  gsap.to(target, { rotationY: to, duration: .75, ease: 'power3.out', transformPerspective: 500, overwrite: true });
+  spinCount++;
+  if (spinCount % 10 === 0) {
+    gradOn = !gradOn;
+    $('flash').classList.remove('on'); void $('flash').offsetWidth; $('flash').classList.add('on');
+    gradHost.classList.toggle('grad', gradOn); $('logo').classList.toggle('grad', gradOn); document.getElementById('t-mark')?.classList.toggle('grad', gradOn);
+    sound.stamp();
+    toast(gradOn ? '十回轉 — 衝이 달아올랐다' : '다시 열 바퀴 — 식었다');
   }
 }
 $('logo').onclick = () => spin($('logo-spin'), $('logo'));
@@ -232,7 +246,7 @@ function resetBoard(fen: string) {
 }
 function matchSetup() {
   $('screen').className = 'dim';
-  $('screen').innerHTML = '<div class="panel dlg"><div class="ph"><span class="lbl">대국</span><span class="lbl">DOC. 01</span></div><div class="pb">'
+  $('screen').innerHTML = '<div class="panel dlg"><div class="ph"><span class="lbl">대국</span></div><div class="pb">'
     + '<h2>대국 조건</h2><p class="sub">흑은 AI. 백은 당신.</p>'
     + '<div class="set" style="width:auto;margin-top:12px"><div class="line"><span class="lbl">규칙</span>' + segVariant() + '</div><div class="line"><span class="lbl">상대</span>' + segLevel() + '</div></div>'
     + '<div class="idx">' + row('g-go', '▶', '시작', 'ENTER', 'main') + row('g-back', '←', '돌아가기', 'ESC') + '</div></div></div>';
@@ -276,7 +290,7 @@ function drawMarks() {
   if (pz.from >= 0) c.circle([X(pz.from), Z(pz.from)], .44, { color: '#ffd59a', dur: 0 });
 }
 function drawSelection() {
-  const c = stage.chalk; c.clearNow(); drawMarks();
+  const c = stage.chalk; c.clearNow(); drawMarks(); if (selected < 0) pending = null;
   if (selected < 0) return;
   c.circle([X(selected), Z(selected)], .44, { dur: 120, alpha: .9 });
   for (const m of targetsOf(selected)) {
@@ -285,20 +299,20 @@ function drawSelection() {
     else c.circle([X(m.to), Z(m.to)], .09, { dur: 60, alpha: .7 });
   }
 }
-function onHover(sq: number) {
-  stage.setHover(sq);
-  if (busy || selected < 0 || (screen !== 'play' && screen !== 'lesson' && screen !== 'puzzle')) return;
-  const m = targetsOf(selected).find(x => x.to === sq && (!x.promo || x.promo === 'q'));
-  if (m && aimOn) {
-    if (screen === 'puzzle' && puz) {
-      const s = puz.seals;
-      if (s.includes('盲') || s.includes('宣')) { drawSelection(); return; }
-      sketch(stage.chalk, pos, m, 'clash', { half: s.includes('半'), classical: s.includes('速') }); drawMarks();
-      return;
-    }
-    sketch(stage.chalk, pos, m, mode, { newton: screen === 'lesson' && EXPERIMENTS[exp].newton });
-  } else drawSelection();
-  if (screen === 'lesson' && expPhase === 'do') hint();
+/** Hover only lights the square; the preview belongs to the click (see onSquare). */
+function onHover(sq: number) { stage.setHover(sq); }
+/** Second-stage selection: a target was clicked once and its outcome is chalked; clicking it again plays it. */
+let pending: Move | null = null;
+function preview(m: Move) {
+  const c = stage.chalk;
+  const quiet = () => { c.clearNow(); drawMarks(); c.circle([X(m.from), Z(m.from)], .44, { dur: 0, alpha: .9 }); c.arrow([X(m.from), Z(m.from)], [X(m.to), Z(m.to)], { dash: .12, alpha: .8, dur: 140 }); c.circle([X(m.to), Z(m.to)], .4, { delay: 100, dur: 120, color: '#ffc98a' }); };
+  if (!aimOn) return quiet();
+  if (screen === 'puzzle' && puz) {
+    const s = puz.seals;
+    if (s.includes('盲') || puz.goal.type === 'mate') return quiet();
+    sketch(stage.chalk, pos, m, 'clash', { half: s.includes('半'), classical: s.includes('速') }); drawMarks();
+  } else sketch(stage.chalk, pos, m, mode, { newton: screen === 'lesson' && EXPERIMENTS[exp].newton });
+  stage.chalk.circle([X(m.to), Z(m.to)], .47, { dur: 0, alpha: .55, color: '#ffc98a', dash: .08 });
 }
 async function onSquare(sq: number, button: number) {
   sound.unlock();
@@ -307,21 +321,30 @@ async function onSquare(sq: number, button: number) {
   if (screen === 'puzzle' && puz && declaring()) return declareClick(sq, button);
   if (busy || (screen !== 'play' && screen !== 'lesson' && screen !== 'puzzle') || pos.turn !== 'w') return;
   if (screen === 'lesson' && expPhase !== 'do') return;
-  if (button === 2 || sq < 0) { selected = -1; drawSelection(); return; }
+  if (button === 2 || sq < 0) { selected = -1; pending = null; drawSelection(); if (screen === 'lesson') hint(); return; }
   const own = pos.board[sq];
-  if (own?.side === 'w' && sq !== selected) { selected = sq; sound.tick(); drawSelection(); if (screen === 'lesson') hint(); return; }
+  if (own?.side === 'w' && sq !== selected && !(pending && pending.to === sq)) { selected = sq; pending = null; sound.tick(); drawSelection(); if (screen === 'lesson') hint(); return; }
   if (selected < 0) return;
   const ms = targetsOf(selected).filter(m => m.to === sq);
-  if (!ms.length) { selected = -1; drawSelection(); return; }
+  if (!ms.length) { selected = -1; pending = null; drawSelection(); if (screen === 'lesson') hint(); return; }
   if (screen === 'lesson') {
     const e = EXPERIMENTS[exp];
     if (e.id !== 'move' && (name(selected) !== e.move[0] || name(sq) !== e.move[1])) { toast('이번 실험은 분필로 표시된 수로 해 보세요'); return; }
   }
+  // first click on a target: show what will happen; second click: do it
+  if (!pending || pending.to !== sq || pending.from !== selected) {
+    pending = ms.find(m => !m.promo || m.promo === 'q') ?? ms[0];
+    sound.chalk(120); preview(pending);
+    if (screen === 'lesson' && !hintedConfirm) { hintedConfirm = true; toast('한 번 더 누르면 둔다'); }
+    return;
+  }
+  pending = null;
   const m = ms.length > 1 ? await promotion(ms) : ms[0];
   if (!m) return;
   if (screen === 'puzzle') return puzzleMove(m);
   await commit(m);
 }
+let hintedConfirm = false;
 function promotion(ms: Move[]): Promise<Move | null> {
   return new Promise(res => {
     $('screen').className = 'dim';
@@ -750,21 +773,23 @@ function renderBook(anim = false) {
   const total = solvedCount();
   const tiers = TIERS.map((T, i) => {
     const t = i + 1, open = tierOpen(t);
-    return '<button class="tier' + (t === bookTier ? ' sel' : '') + (open ? '' : ' locked') + '" data-t="' + t + '" style="--tc:' + T.color + '"><span class="sw"></span><span class="nm">★' + t + ' ' + T.star + '<small>' + T.cls + ' · ' + T.k.toLocaleString() + 'K</small></span><span class="pr">' + (open ? tierSolved(t) + '/10' : '잠김') + '</span></button>';
+    const n = tierSolved(t);
+    return '<button class="tier' + (t === bookTier ? ' sel' : '') + (open ? '' : ' locked') + '" data-t="' + t + '" style="--tc:' + T.color + '"><span class="sw"></span><span class="nm">★' + t + ' ' + T.star + '<small>' + T.cls + '형 ' + T.k.toLocaleString() + 'K</small></span>'
+      + '<span class="pr" title="' + n + '/10">' + Array.from({ length: 10 }, (_, i) => '<i class="' + (i < n ? 'on' : '') + '"></i>').join('') + '</span></button>';
   }).join('');
   const ps = PUZZLES.filter(p => p.tier === bookTier), open = tierOpen(bookTier);
   const cells = ps.map(p => {
     const r = book[p.id], torn = isTorn(p.id);
-    return '<button class="cell' + (r?.solved ? ' done' : '') + (torn ? ' torn' : '') + (p.id === bookSel ? ' sel' : '') + (open ? '' : ' locked') + '" data-p="' + p.id + '"' + (r?.img ? ' style="background-image:url(' + r.img + ')"' : '') + '><span class="no">No. ' + pad(p.id) + '</span>'
+    return '<button class="cell' + (r?.solved ? ' done' : '') + (torn ? ' torn' : '') + (p.id === bookSel ? ' sel' : '') + (open ? '' : ' locked') + '" data-p="' + p.id + '"' + (r?.img ? ' style="background-image:url(' + r.img + ')"' : '') + '><span class="no">' + p.id + '</span>'
       + '<span class="st">' + (r?.solved ? '<span class="seal">解</span>' : torn ? '<span class="seal">破</span>' : '') + '</span></button>';
   }).join('');
   const sp = PUZZLES.find(p => p.id === bookSel)!, r = book[sp.id];
   const seals = sp.seals.length ? sp.seals.map(s => '<span class="seal">' + s + '</span>').join('') : '<span class="lbl">제약 없음</span>';
   const introSeals = [...new Set(ps.flatMap(p => p.seals))];
   $('screen').className = 'dim left';
-  $('screen').innerHTML = '<div class="panel shell"><div class="ph"><span class="lbl">당구 문제 · 문제집</span><span class="lbl">解 ' + total + ' / ' + PUZZLES.length + '</span></div><div class="pb">'
+  $('screen').innerHTML = '<div class="panel shell"><div class="ph"><span class="lbl">당구 문제</span><span class="lbl">' + total + ' / ' + PUZZLES.length + ' 풀이</span></div><div class="pb">'
     + '<div class="tiers">' + tiers + '</div><div class="grid">'
-    + '<div style="display:flex;justify-content:space-between;align-items:end"><div><span class="lbl">★' + bookTier + ' · ' + TIERS[bookTier - 1].star + '</span><h2 style="margin-top:6px">' + stars(bookTier) + '</h2></div>'
+    + '<div style="display:flex;justify-content:space-between;align-items:end;gap:20px"><div><h2>' + TIERS[bookTier - 1].star + '</h2><div style="margin-top:6px">' + stars(bookTier) + '</div></div>'
     + '<div class="sealkey">' + (introSeals.length ? introSeals.map(s => '<span class="seal">' + s + '</span><span>' + SEAL_TEXT[s] + '</span>').join('') : '<span></span><span>조준 판서가 결과를 전부 보여 준다</span>') + '</div></div>'
     + (open ? '' : '<p class="sub">앞 단계에서 7문제를 풀면 열린다.</p>')
     + '<div class="cells">' + cells + '</div>'
@@ -796,7 +821,7 @@ function renderCodex(anim = false) {
   const plates = list.map(e => {
     const c = codex[e.id];
     return '<button class="plate' + (c ? '' : ' unk') + (e.id === codexSel ? ' sel' : '') + '" data-c="' + e.id + '"><div class="img"' + (c?.img ? ' style="background-image:url(' + c.img + ')"' : '') + '>' + (c ? '' : '?') + '</div>'
-      + '<div class="cap2"><span class="lbl"><span>No. ' + pad(e.no) + '</span>' + pips(e.rarity) + '</span><b>' + (c ? e.name : '미발견') + '</b></div></button>';
+      + '<div class="cap2"><b>' + (c ? e.name : '미발견') + '</b><span class="lbl"><span>No. ' + pad(e.no) + '</span>' + pips(e.rarity) + '</span></div></button>';
   }).join('');
   const e = byId.get(codexSel)!, c = codex[e.id];
   const d = c ? new Date(c.t) : null, two = (n: number) => String(n).padStart(2, '0');
@@ -828,15 +853,15 @@ const Q_HINT: Record<Quality, string> = {
 function openSettings(back: () => void, anim = true) {
   const seg = (key: string, opts: [string, string][], cur: string) => '<div class="seg">' + opts.map(([v, t]) => '<button data-s="' + key + '" data-v="' + v + '" class="' + (v === cur ? 'on' : '') + '">' + t + '</button>').join('') + '</div>';
   $('screen').className = 'dim';
-  $('screen').innerHTML = '<div class="panel set"><div class="ph"><span class="lbl">설정</span><span class="lbl">DOC. 05</span></div><div class="pb">'
+  $('screen').innerHTML = '<div class="panel set"><div class="ph"><span class="lbl">설정</span></div><div class="pb">'
     + '<div class="line"><span class="lbl">화질</span>' + seg('quality', (Object.keys(Q_NAME) as Quality[]).map(q => [q, Q_NAME[q]]), settings.quality) + '<span class="hint">' + Q_HINT[settings.quality] + '</span></div>'
     + '<div class="line"><span class="lbl">FPS 표시</span>' + seg('fps', [['0', '끔'], ['1', '켬']], settings.fps ? '1' : '0') + '</div>'
     + '<div class="line"><span class="lbl">소리</span>' + seg('muted', [['0', '켬'], ['1', '끔']], settings.muted ? '1' : '0') + '</div>'
     + '<div class="line"><span class="lbl">음량</span><input type="range" id="s-vol" min="0" max="100" value="' + Math.round(settings.volume * 100) + '"></div>'
-    + '<div class="line"><span class="lbl">조준 판서</span>' + seg('aim', [['1', '켬'], ['0', '끔']], settings.aim ? '1' : '0') + '<span class="hint">대국과 낮은 단계 문제에서 결과를 미리 그린다 (A).</span></div>'
+    + '<div class="line"><span class="lbl">조준 판서</span>' + seg('aim', [['1', '켬'], ['0', '끔']], settings.aim ? '1' : '0') + '</div>'
     + '<div class="line"><span class="lbl">인트로</span>' + seg('intro', [['always', '매번'], ['first', '첫 실행만']], settings.intro) + '</div>'
-    + '<div class="line"><span class="lbl">기록</span><div><button class="btn" id="s-wipe">진행 기록 지우기</button></div><span class="hint">문제집·도감·튜토리얼 기록을 모두 지운다. 되돌릴 수 없다.</span></div>'
-    + '<div class="idx" style="margin-top:8px">' + row('s-back', '←', '돌아가기', 'ESC') + '</div></div></div>';
+    + '<div class="line"><span class="lbl">기록</span><div><button class="btn" id="s-wipe" title="문제집·도감·튜토리얼 기록을 모두 지운다. 되돌릴 수 없다.">진행 기록 지우기</button></div><span class="hint">문제집·도감·튜토리얼 기록을 모두 지운다. 되돌릴 수 없다.</span></div>'
+    + '<div class="acts"><button class="btn" id="s-back">돌아가기 <span class="k">Esc</span></button></div></div></div>';
   if (anim) openPanel($('screen').firstElementChild!);
   document.querySelectorAll<HTMLButtonElement>('[data-s]').forEach(b => b.onclick = () => {
     const k = b.dataset.s!, v = b.dataset.v!;
@@ -852,7 +877,7 @@ function openSettings(back: () => void, anim = true) {
   ($('s-vol') as HTMLInputElement).onchange = () => sound.tick();
   $('s-wipe').onclick = () => {
     if (!confirm('문제집·도감·튜토리얼 기록을 모두 지울까요? 되돌릴 수 없습니다.')) return;
-    for (const k of ['v1:book', 'v1:codex', 'v1:seals', 'tutorial', 'v1:spins']) store.del(k);
+    for (const k of ['v1:book', 'v1:codex', 'v1:seals', 'tutorial']) store.del(k);
     book = {}; codex = {}; seenSeals = []; buildLogo(); toast('기록을 지웠다');
   };
   $('s-back').onclick = back;
@@ -863,9 +888,10 @@ let settingsBack: (() => void) | null = null;
 // ── menu & keys ──────────────────────────────────────────────────────────
 function menu() {
   if (screen === 'title' || screen === 'boot') return;
+  if (screen === 'lesson') return lessonMenu();
   $('screen').className = 'dim';
   const inPuzzle = screen === 'puzzle';
-  $('screen').innerHTML = '<div class="panel dlg"><div class="ph"><span class="lbl">일시 정지</span><span class="lbl">ESC</span></div><div class="pb">'
+  $('screen').innerHTML = '<div class="panel dlg"><div class="ph"><span class="lbl">일시 정지</span></div><div class="pb">'
     + (inPuzzle ? '<h2>No. ' + pad(puz!.id) + '</h2>' : '<h2>쉬는 시간</h2>')
     + (inPuzzle ? '' : '<div class="set" style="width:auto;margin-top:10px"><div class="line"><span class="lbl">규칙</span>' + segVariant() + '</div><div class="line"><span class="lbl">상대</span>' + segLevel() + '</div></div>')
     + '<div class="idx">' + row('m-back', '01', '계속', '', 'main')
@@ -878,7 +904,20 @@ function menu() {
   $('m-set').onclick = () => openSettings(menu);
   $('m-home').onclick = () => title(true);
 }
+/** During the tutorial the menu cannot lead anywhere else (only once the notebook has been finished before). */
+function lessonMenu() {
+  $('screen').className = 'dim';
+  $('screen').innerHTML = '<div class="panel dlg"><div class="ph"><span class="lbl">실험 노트</span></div><div class="pb"><h2>잠시 멈춤</h2>'
+    + '<div class="idx">' + row('m-back', '', '계속', '', 'main') + row('m-again', '', '이 실험 다시', '') + row('m-set', '', '설정', '')
+    + (tutorialDone() ? row('m-home', '', '노트 덮기', '') : '') + '</div></div></div>';
+  openPanel($('screen').firstElementChild!); wireRows($('screen'));
+  $('m-back').onclick = clearScreen;
+  $('m-again').onclick = () => { clearScreen(); expPhase === 'controls' ? controls() : experiment(exp); };
+  $('m-set').onclick = () => openSettings(lessonMenu);
+  if (tutorialDone()) $('m-home').onclick = () => title(true);
+}
 $('btn-menu').onclick = menu;
+for (const id of ['screen', 'note']) new MutationObserver(() => riders($(id))).observe($(id), { childList: true });
 $('btn-pyr').onclick = () => togglePyramid();
 $('btn-reset').onclick = () => { if (!busy && screen === 'puzzle') resetPuzzle(); };
 $('btn-aim').onclick = () => { aimOn = !aimOn; settings.aim = aimOn; saveSettings(settings); $('btn-aim').classList.toggle('on', aimOn); drawSelection(); };

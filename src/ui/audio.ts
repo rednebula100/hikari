@@ -66,6 +66,14 @@ export class Sound {
   /** The pyramid opens: a rising tone. */
   unfold() { this.tone(220, .5, 'sine', .05, { glide: 520 }); }
   tick() { this.tone(1500, .03, 'sine', .03); }
+  /** A wooden piece hitting the table or the brass: louder with speed, deeper with mass. */
+  private lastThud = 0;
+  thud(mass: number, speed: number) {
+    const c = this.ensure(); if (!c) return;
+    if (c.currentTime - this.lastThud < .045) return; this.lastThud = c.currentTime;
+    const v = Math.min(.32, .04 + speed * .012), f = 520 / Math.sqrt(mass + 1);
+    this.tone(f, .09, 'triangle', v); this.noise(.05, v * .8, { from: f * 2.2, q: 1.6 });
+  }
   /** UI hover: a dry, tiny click. */
   hover() { this.tone(2400, .012, 'square', .008); }
   /** Seal: a wooden thud + paper. */

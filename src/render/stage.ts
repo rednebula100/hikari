@@ -2,6 +2,7 @@ import * as T from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { loadSet, type ChessSet } from './assets';
 import { Chalk } from './chalk';
+import { Debris } from './physics';
 import { C, gamma } from '../engine/collide';
 import { MASS, cheb, file, rank, type Outcome, type Pos, type Piece, type Kind, type Side } from '../engine/rules';
 import type { Sound } from '../ui/audio';
@@ -69,6 +70,13 @@ export class Stage {
   quality: Quality = 'auto';
   private cone!: T.Mesh<T.ConeGeometry, T.ShaderMaterial>;
   private lampOn = true; private lampColor = new T.Color(0xffc98a);
+  /** Pieces thrown off the board (rigid bodies). */
+  private debris = new Debris();
+  private hulls = new Map<string, Float32Array>();
+  /** Secondary motion: every piece leans with inertia and rocks on its base (damped spring per piece). */
+  private wob = new Map<string, { px: number; pz: number; vx: number; vz: number; tx: number; tz: number; wx: number; wz: number }>();
+  /** Time-scale for secondary motion (slow-motion replays rock slowly too). */
+  private warp = 1;
   private tmpA = new T.Vector3(); private tmpB = new T.Vector3(); private tmpC = new T.Vector3();
   private hoverMesh = new T.Mesh(new T.PlaneGeometry(.96, .96), new T.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: .06, depthWrite: false }));
   onSquare: (sq: number, button: number) => void = () => {};
@@ -105,6 +113,8 @@ export class Stage {
     this.scene.add(this.chalk.mesh, this.ghosts, this.flashLight);
     this.hoverMesh.rotation.x = -Math.PI / 2; this.hoverMesh.visible = false; this.scene.add(this.hoverMesh);
     this.buildTiles();
+    this.debris.onImpact = (m, v) => this.sound.thud(m, v);
+    setTimeout(() => void this.debris.init(box, this.surface), 400); // after first paint: the WASM engine loads lazily
   }
 
   // ── the night physics lab ──────────────────────────────────────────────
@@ -183,12 +193,13 @@ export class Stage {
   /** Snap every model to the position (no animation). */
   sync(pos: Pos, bump = true) {
     this.shadowDirty = true;
-    if (bump) { this.epoch++; this.railLight(false, []); this.camOverride = null; }
+    if (bump) { this.epoch++; this.railLight(false, []); this.camOverride = null; this.debris.clear(); }
     const live = new Set<string>();
     pos.board.forEach((p, s) => {
       if (!p) return;
       const m = this.model(p); live.add(p.id);
       m.position.set(X(s), this.surface, Z(s)); m.rotation.set(0, 0, 0); m.scale.setScalar(1); m.visible = true;
+      const w = this.wob.get(p.id); if (w) { w.px = m.position.x; w.pz = m.position.z; w.vx = w.vz = 0; if (bump) w.tx = w.tz = w.wx = w.wz = 0; }
     });
     for (const [id, m] of this.pieces) if (!live.has(id)) { this.scene.remove(m); this.pieces.delete(id); }
   }
@@ -296,7 +307,8 @@ export class Stage {
     const d = Math.max(Math.abs(file(to) - file(from)), Math.abs(rank(to) - rank(from)));
     const dur = this.reduced ? 120 : 240 + 70 * d, a = new T.Vector3(X(from), this.surface, Z(from)), b = new T.Vector3(X(to), this.surface, Z(to));
     this.sound.slide(d / 4, dur);
-    return this.tween(dur, u => { obj.position.lerpVectors(a, b, ease(u)); });
+    // pushed: quick start, long friction stop (the lean/rock comes from the inertia spring)
+    return this.tween(dur * 1.15, u => { obj.position.lerpVectors(a, b, 1 - (1 - Math.min(1, u * 1.04)) ** 2.6); });
   }
   private hop(obj: T.Object3D, from: number, to: number, apexHold = 0, height = 1.1) {
     const a = new T.Vector3(X(from), this.surface, Z(from)), b = new T.Vector3(X(to), this.surface, Z(to));
@@ -355,6 +367,7 @@ export class Stage {
     };
     await this.tween(P, u => {
       const t = this.reduced ? u : u < .3 ? .05 * (u / .3) : .05 + .95 * ((u - .3) / .7) ** 1.25;
+      this.warp = this.reduced || u >= .3 ? 1 : .3;
       for (const tr of cl.sim.tracks) {
         const o = this.pieces.get(tr.id); if (!o || exited.has(tr.id)) continue;
         const { s, v } = pos(tr.id, t);
@@ -371,6 +384,7 @@ export class Stage {
         const mb = MASS[(before.board.find(p => p?.id === c.b))?.kind ?? 'p'];
         this.sound.clack(ma + mb, Math.abs(c.before[0] - c.after[0]) * ma, contactIx);
         this.flash(at(c.s).setY(this.surface + .4), contactIx === 1 ? 9 : 4);
+        this.kick(c.a, step, c.after[0] - c.before[0], ma); this.kick(c.b, step, c.after[1] - c.before[1], mb);
       }
       while (t >= nextStrobe && nextStrobe <= 1) {
         for (const tr of cl.sim.tracks) {
@@ -385,6 +399,24 @@ export class Stage {
       }
     });
     for (const o of this.pieces.values()) o.scale.set(1, 1, 1);
+    this.warp = 1;
+    // 4. friction: survivors keep their last velocity and slide to rest on their square (the engine rounds; we decelerate)
+    const settle: [T.Object3D, number, number, number][] = [];
+    for (const tr of cl.sim.tracks) {
+      if (exited.has(tr.id) || tr.exit) continue;
+      const o = this.pieces.get(tr.id); if (!o) continue;
+      const k = tr.keys[tr.keys.length - 1], s1 = k.s, r = Math.min(line.length - 1, Math.max(0, Math.round(s1)));
+      if (Math.abs(s1 - r) > 1e-3 || Math.abs(k.v) > 1e-3) settle.push([o, s1, r, k.v * .8]);
+    }
+    if (settle.length && !this.reduced) {
+      const D = .34;
+      await this.tween(D * 1000, u => {
+        for (const [o, s1, r, v] of settle) {
+          const m0 = Math.max(-1.2, Math.min(1.2, v * D)), h = s1 * (2 * u ** 3 - 3 * u ** 2 + 1) + m0 * (u ** 3 - 2 * u ** 2 + u) + r * (-2 * u ** 3 + 3 * u ** 2);
+          o.position.copy(at(h));
+        }
+      });
+    }
     this.camOverride = null;
     this.railLight(false, line);
     await wait(this.reduced ? 0 : 160);
@@ -396,6 +428,18 @@ export class Stage {
     g.position.copy(o.position); this.ghosts.add(g);
   }
   private fall(o: T.Object3D, dir: T.Vector3, speed: number) {
+    const id = o.userData.id as string, kind = o.userData.kind as Kind;
+    if (this.debris.ready && !this.reduced) {
+      const d = dir.clone().setY(0).normalize(), top = new T.Box3().setFromObject(this.board).max.y;
+      o.position.y = Math.max(o.position.y, top) + .02; o.scale.set(1, 1, 1);
+      const sp = 2 + speed * 1.15;
+      if (this.debris.throw(o, this.hull(o), new T.Vector3(d.x * sp, 1.6 + speed * .35, d.z * sp), MASS[kind] ?? 1)) {
+        this.pieces.delete(id); this.wob.delete(id);
+        this.sound.whistle();
+        return;
+      }
+    }
+    o.userData.noWobble = true;
     const v0 = dir.clone().normalize().multiplyScalar(1.2 + speed * 1.1), p0 = o.position.clone(), spin = (Math.random() - .5) * 6;
     const t0 = performance.now();
     this.sound.fall();
@@ -444,6 +488,54 @@ export class Stage {
     let side = new T.Vector3(-axis.z, 0, axis.x);
     if (side.dot(this.camera.position.clone().sub(at)) < 0) side.negate();
     this.camOverride = { pos: at.clone().addScaledVector(side, 9).add(new T.Vector3(0, 3.2, 0)), look: at.clone().setY(this.surface + .8), k: 0 };
+  }
+
+  /** Convex hull points of a piece model in its own frame (cached per kind/side). */
+  private hull(o: T.Object3D): Float32Array {
+    const key = o.userData.kind + o.userData.side;
+    let h = this.hulls.get(key);
+    if (h) return h;
+    const probe = this.set.make(o.userData.kind, o.userData.side); probe.updateMatrixWorld(true);
+    const pts: number[] = [], v = new T.Vector3();
+    probe.traverse(x => {
+      const m = x as T.Mesh; if (!m.isMesh) return;
+      const a = m.geometry.getAttribute('position'), stride = Math.max(1, Math.floor(a.count / 220));
+      for (let i = 0; i < a.count; i += stride) { v.fromBufferAttribute(a, i).applyMatrix4(m.matrixWorld); pts.push(v.x, v.y, v.z); }
+    });
+    h = new Float32Array(pts); this.hulls.set(key, h); return h;
+  }
+  /** An impulse on a piece's lean: Δv along the line (squares/turn) → the top lags behind. */
+  private kick(id: string, dir: T.Vector3, dv: number, mass: number) {
+    const w = this.wobState(id); if (!w) return;
+    const d = dir.clone().setY(0).normalize(), k = -dv * .55 * 3 / (mass + 2);
+    w.wx += d.x * k; w.wz += d.z * k;
+  }
+  private wobState(id: string) {
+    const o = this.pieces.get(id); if (!o) return null;
+    let w = this.wob.get(id);
+    if (!w) { w = { px: o.position.x, pz: o.position.z, vx: 0, vz: 0, tx: 0, tz: 0, wx: 0, wz: 0 }; this.wob.set(id, w); }
+    return w;
+  }
+  private wobble(dtMs: number) {
+    if (this.pyr.u > .01) return false;
+    const dt = Math.min(.05, dtMs / 1000), ds = dt * this.warp;
+    let live = false;
+    for (const [id, o] of this.pieces) {
+      if (o.userData.noWobble) continue;
+      const w = this.wobState(id)!;
+      const vx = (o.position.x - w.px) / dt, vz = (o.position.z - w.pz) / dt;
+      w.px = o.position.x; w.pz = o.position.z;
+      const m = MASS[o.userData.kind as Kind] ?? 3, g = .11 * 3 / (m + 2) / Math.max(.3, this.warp);
+      w.wx -= Math.max(-6, Math.min(6, (vx - w.vx) * g)); w.wz -= Math.max(-6, Math.min(6, (vz - w.vz) * g));
+      w.vx = vx; w.vz = vz;
+      // damped spring about the base (≈2 Hz, ζ≈.18)
+      w.wx += (-160 * w.tx - 4.6 * w.wx) * ds; w.wz += (-160 * w.tz - 4.6 * w.wz) * ds;
+      w.tx = Math.max(-.2, Math.min(.2, w.tx + w.wx * ds)); w.tz = Math.max(-.2, Math.min(.2, w.tz + w.wz * ds));
+      o.rotation.x = w.tz; o.rotation.z = -w.tx;
+      if (Math.abs(w.tx) + Math.abs(w.tz) + Math.abs(w.wx) + Math.abs(w.wz) > 2e-3) live = true;
+      else { w.tx = w.tz = w.wx = w.wz = 0; }
+    }
+    return live;
   }
 
   private tween(ms: number, f: (u: number) => void) {
@@ -523,6 +615,8 @@ export class Stage {
     requestAnimationFrame(t => this.loop(t));
     const dt = Math.min(60, now - this.last); this.last = now;
     this.anims = this.anims.filter(a => a.update(now));
+    const physics = this.debris.step(dt), rocking = this.wobble(dt);
+    if (physics || rocking) this.shadowDirty = true;
     // camera: player seat with slow breathing, or the collision rail
     const goal = this.pyr.on ? 1 : 0;
     this.pyr.u = this.reduced ? goal : T.MathUtils.damp(this.pyr.u, goal, 5, dt / 1000);
@@ -558,7 +652,7 @@ export class Stage {
       st.label.style.opacity = String(Math.max(0, 1 - this.pyr.u * 3)); // depth says it in the pyramid
     }
     // ── pacing: full rate while anything moves, half rate when the room is still ──
-    const moving = this.anims.length > 0 || this.camOverride !== null || this.chalk?.busy || u !== goal
+    const moving = this.anims.length > 0 || physics || rocking || this.camOverride !== null || this.chalk?.busy || u !== goal
       || this.camera.position.distanceToSquared(seat) > 1e-4 || now - this.lastInput < 1500;
     this.frame++;
     if (this.shadowDirty || this.anims.length) { this.renderer.shadowMap.needsUpdate = true; this.shadowDirty = false; }

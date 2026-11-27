@@ -14,6 +14,10 @@ const KO: Record<string, string> = { p: '폰', n: '나이트', b: '비숍', r: '
  */
 export function sketch(chalk: Chalk, pos: Pos, m: Move, mode: Mode, o: { newton?: boolean; numbers?: boolean; half?: boolean; classical?: boolean } = {}) {
   chalk.clearNow();
+  chalk.tempo = 2.4;
+  try { draw(chalk, pos, m, mode, o); } finally { chalk.tempo = 1; }
+}
+function draw(chalk: Chalk, pos: Pos, m: Move, mode: Mode, o: { newton?: boolean; numbers?: boolean; half?: boolean; classical?: boolean }) {
   const w = (s: number): P => [X(s), Z(s)];
   const r = make(pos, m, mode, { newton: o.classical });
   if (!r.out.clash && !r.out.stomp) { // ordinary move: a quiet dotted path
