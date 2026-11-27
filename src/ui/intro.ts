@@ -12,9 +12,14 @@ export function intro(): Promise<void> {
       if (done) return; done = true
       window.removeEventListener('keydown', finish); el.removeEventListener('pointerdown', finish)
       tl.kill()
-      gsap.to(el, { opacity: 0, duration: .35, ease: 'power2.out', onComplete: () => { el.remove(); res() } })
+      let ended = false
+      const end = () => { if (ended) return; ended = true; el.remove(); res() }
+      gsap.to(el, { opacity: 0, duration: .35, ease: 'power2.out', onComplete: end })
+      setTimeout(end, 650)
     }
     window.addEventListener('keydown', finish); el.addEventListener('pointerdown', finish)
+    // wall-clock fallback: GSAP's lag smoothing slows the card on starved frames (busy loader, throttled tab)
+    setTimeout(finish, 9000)
     const m = { v: -14 }
     const tl = gsap.timeline({ delay: .35, onComplete: finish })
     tl.set(img, { '--m': '-14%', filter: 'brightness(1.35) saturate(1.05) blur(6px)', scale: 1.03 })

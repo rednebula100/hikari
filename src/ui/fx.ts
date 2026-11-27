@@ -32,7 +32,10 @@ export function stamp(ch: string, caption: string, sound?: () => void): Promise<
     el.innerHTML = `<span class="seal">${ch}</span>${caption ? `<span class="cap">${caption}</span>` : ''}`
     document.body.append(el)
     const seal = el.querySelector('.seal')!, cap = el.querySelector('.cap')
-    const tl = gsap.timeline({ onComplete: () => { el.remove(); res() } })
+    let ended = false
+    const end = () => { if (ended) return; ended = true; el.remove(); res() }
+    setTimeout(end, caption ? 4500 : 3000) // wall-clock fallback for starved frames
+    const tl = gsap.timeline({ onComplete: end })
     tl.fromTo(seal, { scale: 2.6, opacity: 0, rotate: -14 }, { scale: 1, opacity: 1, rotate: -4, duration: .18, ease: 'power4.in', onComplete: () => sound?.() })
       .to(el, { x: '+=3', yoyo: true, repeat: 3, duration: .03 }, '>')
     if (cap) tl.fromTo(cap, { opacity: 0, y: 6 }, { opacity: 1, y: 0, duration: .25, ease: 'expo.out' }, '<')
