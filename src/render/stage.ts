@@ -42,6 +42,17 @@ export class Stage {
   aimZ = -1.4;
   private drag?: { x: number; y: number; moved: boolean; button: number };
   private hoverSq = -1;
+  // ── performance state ─────────────────────────────────────────────────
+  private dprCap = 1;
+  private shadowDirty = true;
+  private lastInput = 0;
+  private frame = 0;
+  private settled = false;
+  /** Frame-time statistics for the quality governor and the ?perf overlay. */
+  readonly perf = { fps: 60, ms: 16, level: 0, steps: [] as string[] };
+  private perfWindow: number[] = [];
+  private perfEl: HTMLElement | null = null;
+  private tmpA = new T.Vector3(); private tmpB = new T.Vector3(); private tmpC = new T.Vector3();
   private hoverMesh = new T.Mesh(new T.PlaneGeometry(.96, .96), new T.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: .06, depthWrite: false }));
   onSquare: (sq: number, button: number) => void = () => {};
   onHover: (sq: number) => void = () => {};
@@ -51,6 +62,10 @@ export class Stage {
     this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
     this.renderer.toneMapping = T.ACESFilmicToneMapping; this.renderer.toneMappingExposure = 1.0;
     this.renderer.shadowMap.enabled = true; this.renderer.shadowMap.type = T.PCFSoftShadowMap;
+    this.renderer.shadowMap.autoUpdate = false; // the lamp never moves: re-render shadows only when pieces do
+    this.dprCap = Math.min(devicePixelRatio || 1, 2);
+    // the glass pawn tops sample a roughness-blurred copy of the scene: half resolution is visually identical
+    this.renderer.transmissionResolutionScale = .5;
     this.renderer.setClearColor(0x05060a);
     host.append(this.renderer.domElement);
     this.renderer.domElement.className = 'stage-canvas';
@@ -149,6 +164,7 @@ export class Stage {
   private epoch = 0;
   /** Snap every model to the position (no animation). */
   sync(pos: Pos, bump = true) {
+    this.shadowDirty = true;
     if (bump) { this.epoch++; this.railLight(false, []); this.camOverride = null; }
     const live = new Set<string>();
     pos.board.forEach((p, s) => {
@@ -164,10 +180,10 @@ export class Stage {
   // The board dissolves into 64 glass tiles that sink by their light delay from
   // the King (a square d away is seen d-1 plies late). Enemy afterimages hang at the
   // depth of the instant their light left them.
-  private pyr = { on: false, eye: 4, depth: new Map<string, number>(), u: 0, was: false };
+  private pyr = { on: false, eye: 4, depth: new Map<string, number>(), u: 0, was: false, lastU: -1, dirty: true };
   private tiles?: T.InstancedMesh;
   private pyrLines = new T.LineSegments(new T.BufferGeometry(), new T.LineBasicMaterial({ vertexColors: true, transparent: true, blending: T.AdditiveBlending, depthWrite: false, toneMapped: false }));
-  setPyramid(on: boolean, eye: number, depth: Map<string, number>) { this.pyr.on = on; this.pyr.eye = eye; this.pyr.depth = depth; }
+  setPyramid(on: boolean, eye: number, depth: Map<string, number>) { this.pyr.on = on; this.pyr.eye = eye; this.pyr.depth = depth; this.pyr.dirty = true; }
   get pyramidOpen() { return this.pyr.u > .02; }
   private buildTiles() {
     const geo = new T.BoxGeometry(.97, .06, .97); geo.translate(0, -.03, 0);
@@ -423,6 +439,7 @@ export class Stage {
   private bindInput() {
     const c = this.renderer.domElement;
     c.addEventListener('contextmenu', e => e.preventDefault());
+    for (const ev of ['pointermove', 'pointerdown', 'wheel', 'keydown'] as const) window.addEventListener(ev, () => { this.lastInput = performance.now(); }, { passive: true });
     c.addEventListener('pointerdown', e => { this.drag = { x: e.clientX, y: e.clientY, moved: false, button: e.button }; c.setPointerCapture(e.pointerId); });
     c.addEventListener('pointermove', e => {
       const d = this.drag;
@@ -451,6 +468,7 @@ export class Stage {
   setHover(sq: number) { this.hoverMesh.visible = sq >= 0; if (sq >= 0) this.hoverMesh.position.set(X(sq), this.surface + .003, Z(sq)); }
   private resize() {
     this.size = { w: Math.max(1, this.host.clientWidth), h: Math.max(1, this.host.clientHeight) };
+    this.renderer.setPixelRatio(this.dprCap);
     this.renderer.setSize(this.size.w, this.size.h, false); this.camera.aspect = this.size.w / this.size.h; this.camera.updateProjectionMatrix();
   }
   lampFlicker(on: boolean) { if (this.spot) this.spot.intensity = on ? 220 : 0; }
@@ -464,11 +482,13 @@ export class Stage {
     this.pyr.u = this.reduced ? goal : T.MathUtils.damp(this.pyr.u, goal, 5, dt / 1000);
     if (Math.abs(this.pyr.u - goal) < .002) this.pyr.u = goal;
     const u = this.pyr.u;
-    if (this.tiles && (u > 0 || this.pyr.was)) { this.updatePyramid(u); this.pyr.was = u > 0; }
+    if (this.tiles && (u > 0 || this.pyr.was) && (u !== this.pyr.lastU || this.pyr.dirty)) {
+      this.updatePyramid(u); this.pyr.was = u > 0; this.pyr.lastU = u; this.pyr.dirty = false; this.shadowDirty = true;
+    }
     const breathe = this.reduced ? 0 : Math.sin(now / 4200) * .004;
     const yaw = this.yaw + breathe + .62 * u, pitch = this.pitch - .45 * u, dist = this.dist * (1 + .1 * u);
-    const seat = new T.Vector3(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)).multiplyScalar(dist);
-    const aim = new T.Vector3(0, -1.5 * u, this.aimZ * (1 - u) + .2 * u);
+    const seat = this.tmpA.set(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)).multiplyScalar(dist);
+    const aim = this.tmpB.set(0, -1.5 * u, this.aimZ * (1 - u) + .2 * u);
     if (this.camOverride) {
       this.camOverride.k = Math.min(1, this.camOverride.k + dt / 380);
       const k = ease(this.camOverride.k);
@@ -486,13 +506,51 @@ export class Stage {
     this.chalk?.update(dt);
     for (const [id, st] of this.stale) {
       const m = this.pieces.get(id); if (!m) continue;
-      const v = m.position.clone().add(new T.Vector3(0, .05, -.62)).project(this.camera); // at the front edge of the base
+      const v = this.tmpC.copy(m.position).add(LABEL_OFFSET).project(this.camera); // at the front edge of the base
       st.label.style.transform = `translate(${(v.x + 1) / 2 * this.size.w}px,${(1 - v.y) / 2 * this.size.h}px)`;
       st.label.style.opacity = String(Math.max(0, 1 - this.pyr.u * 3)); // depth says it in the pyramid
     }
+    // ── pacing: full rate while anything moves, half rate when the room is still ──
+    const moving = this.anims.length > 0 || this.camOverride !== null || this.chalk?.busy || u !== goal
+      || this.camera.position.distanceToSquared(seat) > 1e-4 || now - this.lastInput < 1500;
+    this.frame++;
+    if (this.shadowDirty || this.anims.length) { this.renderer.shadowMap.needsUpdate = true; this.shadowDirty = false; }
+    if (!moving && this.settled && this.frame % 2) return;
+    this.settled = !moving;
+    const t0 = performance.now();
     this.renderer.render(this.scene, this.camera);
+    this.govern(now, performance.now() - t0, moving);
   }
+
+  /**
+   * Quality governor — the last resort. It does nothing while frames are fast enough.
+   * Only when the frame interval stays above ~33 ms (below 30 fps) for 3 s of active
+   * rendering does it step quality down, cheapest visual loss first.
+   */
+  private govern(now: number, cpuMs: number, moving: boolean) {
+    const w = this.perfWindow;
+    w.push(now);
+    while (w.length && now - w[0] > 3000) w.shift();
+    if (w.length > 2) { const span = (w[w.length - 1] - w[0]) / (w.length - 1); this.perf.ms = span; this.perf.fps = 1000 / span; }
+    if (this.perfEl) this.perfEl.textContent = `${this.perf.fps.toFixed(0)} fps · ${this.perf.ms.toFixed(1)} ms/frame · render ${cpuMs.toFixed(1)} ms cpu · `
+      + `${this.renderer.info.render.calls} calls · ${(this.renderer.info.render.triangles / 1000).toFixed(0)}k tris · dpr ${this.renderer.getPixelRatio()} · level ${this.perf.level}${this.perf.steps.length ? ' (' + this.perf.steps.join(', ') + ')' : ''}`;
+    // ≥30 frames in the window: a genuinely slow machine (≥10 fps), not a throttled background tab
+    if (!moving || w.length < 30 || this.perf.ms < 33 || document.hidden) return;
+    const steps: [string, () => void][] = [
+      ['dpr 1.5', () => { this.dprCap = Math.min(this.dprCap, 1.5); this.resize(); }],
+      ['glass ¼', () => { this.renderer.transmissionResolutionScale = .25; }],
+      ['dpr 1.25', () => { this.dprCap = Math.min(this.dprCap, 1.25); this.resize(); }],
+      ['shadow 1024', () => { this.spot.shadow.mapSize.set(1024, 1024); this.spot.shadow.map?.dispose(); this.spot.shadow.map = null; this.shadowDirty = true; }],
+      ['dpr 1', () => { this.dprCap = 1; this.resize(); }],
+    ];
+    if (this.perf.level >= steps.length) return;
+    const [name, apply] = steps[this.perf.level++];
+    apply(); this.perf.steps.push(name); w.length = 0;
+  }
+  /** ?perf overlay. */
+  showPerf() { this.perfEl = document.createElement('div'); this.perfEl.className = 'perf'; document.body.append(this.perfEl); }
 }
+const LABEL_OFFSET = new T.Vector3(0, .05, -.62);
 const STALE = new T.MeshStandardMaterial({ color: 0xffa0ae, emissive: 0x401018, transparent: true, opacity: .34, depthWrite: false, roughness: .3 });
 const GHOST = new T.MeshBasicMaterial({ color: 0xdfe8ff, transparent: true, opacity: .11, depthWrite: false, blending: T.AdditiveBlending, toneMapped: false });
 export type { Side };

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.2 — performance pass (2026-11-27)
+Measured at 1024×768 on the dev machine (synchronous render + GPU flush, 30-frame average):
+idle 40 ms → 24 ms (and rendered at half rate while nothing moves), moving 40+ ms → 30 ms; triangles/frame 3M+ → 0.97M.
+- Chess set geometry simplified offline to ~30 % (normal maps keep the detail; `?hipoly` loads the original).
+- Shadow map re-rendered only when pieces move (the lamp is fixed).
+- Glass pawn tops: transmission pass at half resolution (visually identical — it samples a roughness-blurred copy).
+- Idle pacing: half frame rate when nothing moves and there is no input.
+- Chalk: static tiled grain texture instead of a full-canvas erosion pass per redraw; redraw capped ~45 Hz.
+- AI search moved to a Web Worker (hard AI no longer freezes the main thread for ~185 ms).
+- Quality governor (last resort): only if frames stay above 33 ms while active — steps dpr 1.5 → glass ¼ → dpr 1.25 → shadow 1024 → dpr 1.
+- `?perf` overlay: fps, frame time, draw calls, triangles, governor level.
+
 ## 0.4.1 — 光 pyramid (2026-11-27)
 - 光 mode: Space / triangle button opens the light pyramid — the board dissolves into glass tiles that sink by
   their light delay from the King; enemy afterimages hang at the depth their light left them, with stalks to the present.

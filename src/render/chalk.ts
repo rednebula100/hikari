@@ -27,13 +27,15 @@ export class Chalk {
     this.ctx = this.canvas.getContext('2d')!;
     this.tex = new T.CanvasTexture(this.canvas);
     this.tex.colorSpace = T.SRGBColorSpace; this.tex.anisotropy = 8;
-    const mat = new T.MeshBasicMaterial({ map: this.tex, transparent: true, depthWrite: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2 });
+    // chalk grain: a static, tiled alpha texture (no per-redraw erosion pass)
+    const gc = document.createElement('canvas'); gc.width = gc.height = 256; const gx = gc.getContext('2d')!;
+    const img = gx.createImageData(256, 256);
+    for (let i = 0; i < img.data.length; i += 4) { const v = Math.random(); const a = v > .72 ? 70 : v > .5 ? 185 : 255; img.data[i] = img.data[i + 1] = img.data[i + 2] = a; img.data[i + 3] = 255; }
+    gx.putImageData(img, 0, 0);
+    const grain = new T.CanvasTexture(gc); grain.wrapS = grain.wrapT = T.RepeatWrapping; grain.repeat.set(16, 16);
+    const mat = new T.MeshBasicMaterial({ map: this.tex, alphaMap: grain, transparent: true, depthWrite: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2 });
     this.mesh = new T.Mesh(new T.PlaneGeometry(EXTENT, EXTENT), mat);
     this.mesh.rotation.x = -Math.PI / 2; this.mesh.position.y = y + 0.006; this.mesh.renderOrder = 4;
-    const g = document.createElement('canvas'); g.width = g.height = 128; const gc = g.getContext('2d')!;
-    const img = gc.createImageData(128, 128);
-    for (let i = 0; i < img.data.length; i += 4) { const v = Math.random(); img.data[i + 3] = v > 0.72 ? 190 : v > 0.5 ? 70 : 0; }
-    gc.putImageData(img, 0, 0); this.grain = this.ctx.createPattern(g, 'repeat');
   }
   private px([x, z]: P): P { return [(x + EXTENT / 2) / EXTENT * 2048, (z + EXTENT / 2) / EXTENT * 2048]; }
   get busy() { return this.dirty || this.strokes.some(s => this.clock < s.t0 + s.dur) || this.eraseStart >= 0; }
@@ -70,7 +72,10 @@ export class Chalk {
     this.dirty = true;
   }
 
+  private lastDraw = 0;
   update(_dtMs: number) {
+    if (!this.dirty && this.clock - this.lastDraw < 22) return;
+    this.lastDraw = this.clock;
     if (!this.busy) return;
     const c = this.ctx;
     c.clearRect(0, 0, 2048, 2048);
@@ -121,8 +126,6 @@ export class Chalk {
       left = 0;
     }
     c.setLineDash([]);
-    // chalk grain: erode the strokes
-    if (this.grain) { c.globalAlpha = 0.55; c.globalCompositeOperation = 'destination-out'; c.fillStyle = this.grain; c.fillRect(0, 0, 2048, 2048); c.globalCompositeOperation = 'source-over'; }
     c.globalAlpha = 1;
     this.tex.needsUpdate = true;
     this.dirty = false;

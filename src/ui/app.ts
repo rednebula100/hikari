@@ -17,6 +17,20 @@ const GLYPH: Record<Side, Record<Kind, string>> = { w: { k: '♔', q: '♕', r: 
 const KO: Record<Kind, string> = { k: '킹', q: '퀸', r: '룩', b: '비숍', n: '나이트', p: '폰' };
 const wait = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
+// ── the opponent thinks in a Web Worker (falls back to the main thread) ──
+let worker: Worker | null = null, jobId = 0;
+const jobs = new Map<number, (m: Move | null) => void>();
+try {
+  worker = new Worker(new URL('../engine/ai.worker.ts', import.meta.url), { type: 'module' });
+  worker.onmessage = (e: MessageEvent<{ id: number; move: Move | null }>) => { jobs.get(e.data.id)?.(e.data.move); jobs.delete(e.data.id); };
+  worker.onerror = () => { worker = null; };
+} catch { worker = null; }
+function think(p: Pos, m: Mode, lvl: Level, hist: string[]): Promise<Move | null> {
+  const seed = Math.floor(random() * 2 ** 31);
+  if (!worker) return Promise.resolve(choose(p, m, lvl, rng(seed), hist));
+  return new Promise(res => { const id = ++jobId; jobs.set(id, res); worker!.postMessage({ id, pos: p, mode: m, level: lvl, seed, history: hist }); });
+}
+
 // ── state ────────────────────────────────────────────────────────────────
 const sound = new Sound(); sound.setMuted(store.get('muted') === '1');
 const stage = new Stage($('stage'), sound);
@@ -255,7 +269,7 @@ async function lightTurn(m: Move) {
   setStatus('흑이 움직인다 — 보이지 않는다');
   await wait(420);
   const bel = belief(truth, sightings(hist, outs, 'b'), 'b');
-  const am = choose(bel, 'clash', level, random);
+  const am = await think(bel, 'clash', level, []);
   if (am) await lightStep(am, 'b');
   if (await lightOver()) return;
   busy = false;
@@ -279,7 +293,7 @@ async function lightOver(): Promise<boolean> {
 async function aiTurn() {
   setStatus('흑이 계산 중…');
   await wait(380);
-  const m = choose(pos, mode, level, random, history);
+  const m = await think(pos, mode, level, history);
   if (!m) { busy = false; return; }
   await play(m);
   if (await finished()) return;
@@ -406,6 +420,7 @@ document.addEventListener('keydown', e => {
 });
 stage.onSquare = (s, b) => { void onSquare(s, b); };
 stage.onHover = onHover;
+if (new URLSearchParams(location.search).has('perf')) stage.showPerf();
 void boot();
 
 if (import.meta.env.DEV) Object.assign(window, { chung: {

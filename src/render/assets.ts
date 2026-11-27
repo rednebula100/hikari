@@ -21,7 +21,8 @@ export async function loadSet(renderer: T.WebGLRenderer, onProgress?: (f: number
   const draco = new DRACOLoader().setDecoderPath(base + 'decoders/draco/');
   const ktx2 = new KTX2Loader().setTranscoderPath(base + 'decoders/basis/').detectSupport(renderer);
   const loader = new GLTFLoader().setDRACOLoader(draco).setKTX2Loader(ktx2);
-  const gltf = await loader.loadAsync(base + 'assets/ABeautifulGame.glb', e => { if (e.total) onProgress?.(e.loaded / e.total); });
+  const file = new URLSearchParams(location.search).has('hipoly') ? 'ABeautifulGame.glb' : 'ABeautifulGame.lod.glb';
+  const gltf = await loader.loadAsync(base + 'assets/' + file, e => { if (e.total) onProgress?.(e.loaded / e.total); });
   draco.dispose(); ktx2.dispose();
   const root = gltf.scene;
   root.updateMatrixWorld(true);
