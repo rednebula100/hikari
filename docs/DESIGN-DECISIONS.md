@@ -1,5 +1,33 @@
 # Design decisions
 
+## v0.4 — 衝 (2026-11-27)
+
+### K1. Captures become collisions
+Research (docs/PLAN-v0.4.md) found push-off variants (Dynamo, Falling Off) proven fun but none with real
+mass/momentum physics. 衝 resolves every capture as an exact 1D collision along the move's line (all pieces on
+that line take part), simulated event-by-event for one turn, then snapped to squares.
+
+### K2. c = 4 squares/turn and a hyperbolic run-up
+With c = 8 relativity changed almost no outcome on an 8×8 board (largest difference 7.44 vs 7.60 squares).
+At c = 4 with constant proper acceleration (γ = 1 + aL/c², a = 1.46) speed saturates below c while momentum keeps
+growing; e.g. queen 7-square run → pawn: Newton 8.1 squares, relativistic 3.8. Relativity now decides outcomes.
+
+### K3. Knights stomp
+The only orthodox capture left: a vertical, perfectly inelastic impact (kinetic energy → heat, shown as glow).
+
+### K4. Physical check
+Check = the opponent has a move that removes your King. Legality, mate and stalemate follow FIDE with that
+definition; castling transit squares use orthodox attack geometry.
+
+### K5. 光 stays as an advanced mode
+v0.3's light-delayed sight is layered on 衝: intentions are chosen on the believed board, resolved on the true
+one; no check rules there (check may be invisible); King removal wins.
+
+### K6. Direction
+Night physics lab (strobe photography × chalk × air-track). Every animation replays the engine's event list.
+
+---
+
 ## v0.3 — Relativistic Chess (2026-11-27, user direction)
 
 ### C1. Chess first

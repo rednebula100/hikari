@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0 — 衝 (2026-11-27)
+- Collision chess: captures replaced by exact 1D relativistic elastic collisions (c = 4 squares/turn,
+  hyperbolic run-up), ring-outs, Newton's-cradle chains, knight stomp, physical check/mate.
+- Full FIDE rules engine (castling, en passant, promotion, check, mate, stalemate, 50-move, threefold),
+  verified by perft and a chess.js oracle.
+- Khronos "A Beautiful Game" PBR set; night physics lab direction: lamp + dust cone, chalk aiming sketches,
+  stroboscopic multi-exposure, rail camera slow motion, pitched clacks, heat glow, blackboard match log.
+- Title sequence, POE "실험 노트" tutorial (7 engine-verified experiments), 光 advanced mode (light-delayed sight).
+
 ## 0.3.0 — 빛의 체스 (2026-11-27)
 - Redesign as relativistic chess: standard chess + light at one square per move seen from the King.
 - Blind shots (sliders stop at the first real piece), pawn miss/blocked, contact sightings, King capture wins.

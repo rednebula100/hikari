@@ -104,3 +104,5 @@ button:focus-visible{outline:2px dashed var(--amber);outline-offset:4px}
 .credits a{color:var(--amber)}
 .promo{display:flex;gap:10px}.promo button{font-size:44px;width:64px;height:64px;border-radius:8px;background:rgba(243,239,226,.08)}
 .title{padding:40px 90px 30px;background:radial-gradient(ellipse at 50% 50%,rgba(5,6,10,.72) 0%,rgba(5,6,10,.45) 45%,transparent 72%)}
+
+.age{position:absolute;left:0;top:0;margin:-6px 0 0 -24px;font-family:var(--pen);font-size:21px;color:#ffb8c2;text-shadow:0 0 4px #000,0 0 8px #000;pointer-events:none;white-space:nowrap}

@@ -4,6 +4,7 @@ import { sketch } from '../render/aim';
 import { fromFen, toFen, legal, make, status, inCheck, kingSq, pseudo, other, name, parse, START, file, rank, type Pos, type Move, type Mode, type Kind, type Side, type Outcome } from '../engine/rules';
 import { choose, rng, LEVEL_NAME, type Level } from '../engine/ai';
 import { EXPERIMENTS } from '../engine/lessons';
+import { sightings, belief, intentions, resolve, apply } from '../engine/fog';
 import { gamma } from '../engine/collide';
 import { Sound } from './audio';
 
@@ -21,7 +22,14 @@ const sound = new Sound(); sound.setMuted(store.get('muted') === '1');
 const stage = new Stage($('stage'), sound);
 type Screen = 'boot' | 'title' | 'play' | 'lesson' | 'over';
 let screen: Screen = 'boot';
-let mode: Mode = (store.get('mode') as Mode) || 'clash';
+type Variant = 'clash' | 'light' | 'classic';
+let variant: Variant = (store.get('variant') as Variant) || 'clash';
+let mode: Mode = variant === 'classic' ? 'classic' : 'clash';
+// 光 mode keeps the truth separately; `pos` is what White believes
+let truth: Pos = fromFen(START);
+let hist: Pos[] = [];
+let outs: (Outcome | null)[] = [];
+let variantBeforeLesson: Variant | undefined;
 let level: Level = (Number(store.get('level')) || 2) as Level;
 let pos: Pos = fromFen(START);
 let history: string[] = [];
@@ -101,20 +109,24 @@ function credits() {
 // ── a game ───────────────────────────────────────────────────────────────
 function resetBoard(fen: string) {
   titleToken++;
-  pos = fromFen(fen); history = []; moveNo = 0; selected = -1; busy = false;
+  pos = fromFen(fen); truth = pos; hist = [pos]; outs = [];
+  stage.showStale(new Map()); history = []; moveNo = 0; selected = -1; busy = false;
   stage.chalk.clearNow(); stage.clearStrobe(); stage.sync(pos);
   $('case-me').innerHTML = ''; $('case-them').innerHTML = '';
   board = []; stage.writeBlackboard(board);
 }
 function newGame() {
+  if (variantBeforeLesson) { variant = variantBeforeLesson; variantBeforeLesson = undefined; }
+  mode = variant === 'classic' ? 'classic' : 'clash';
   screen = 'play'; random = rng((Math.random() * 2 ** 31) >>> 0);
   resetBoard(START);
   $('screen').innerHTML = ''; $('screen').className = ''; $('note').hidden = true; $('hud').hidden = false;
   stage.resetCamera(); stage.aimZ = -.7; stage.lampFlicker(true); sound.ambience(true);
-  setStatus(mode === 'clash' ? '백의 차례' : '백의 차례 · 클래식');
+  if (variant === 'light') refreshLight();
+  setStatus(variant === 'light' ? '백의 차례 · 光 — 멀리 있는 것은 과거다' : variant === 'clash' ? '백의 차례' : '백의 차례 · 클래식');
 }
 
-function targetsOf(from: number) { return legal(pos, mode).filter(m => m.from === from); }
+function targetsOf(from: number) { return (variant === 'light' && screen === 'play' ? intentions(pos) : legal(pos, mode)).filter(m => m.from === from); }
 function drawSelection() {
   const c = stage.chalk; c.clearNow();
   if (selected < 0) return;
@@ -184,6 +196,7 @@ function record(before: Pos, out: Outcome) {
 async function commit(m: Move) {
   busy = true; selected = -1;
   stage.chalk.erase(200); sound.chalk(180);
+  if (variant === 'light' && screen === 'play') return lightTurn(m);
   await play(m);
   if (screen === 'lesson') { busy = false; return explain(); }
   if (await finished()) return;
@@ -198,6 +211,54 @@ async function play(m: Move) {
   pos = r.pos;
   record(before, r.out);
 }
+// ── 光: choose on what you see, resolve on what is ───────────────────────
+function refreshLight() {
+  const seen = sightings(hist, outs, 'w');
+  pos = belief(truth, seen, 'w');
+  stage.sync(pos, false);
+  stage.showStale(new Map(seen.filter(x => x.alive && x.age > 0 && pos.board[x.sq]?.id === x.piece.id).map(x => [x.piece.id, x.age])));
+}
+async function lightStep(intent: Move, side: Side) {
+  const before = truth, res = resolve(before, intent), r = apply(before, res);
+  if (side === 'w') moveNo++;
+  hist.push(r.pos); outs.push(r.out);
+  const mine = (id: string) => before.board.find(p => p?.id === id)?.side === 'w';
+  const touched = !!r.out && (before.board[r.out.move.from]?.side === 'w' || (!!r.out.clash && [...r.out.clash.moved.keys()].some(mine)) || r.out.stomp?.victim.side === 'w');
+  if (r.out && touched) { await stage.play(before, r.out, r.pos); record(before, r.out); }
+  else if (side === 'w') {
+    if (res.kind === 'miss') { sound.miss(); toast('빗나감 — 거기엔 이미 아무도 없었다'); }
+    else if (res.kind === 'blocked') { sound.miss(); toast('막힘 — 보이지 않던 기물이 앞을 막고 있다'); }
+  }
+  truth = r.pos;
+  refreshLight();
+}
+async function lightTurn(m: Move) {
+  await lightStep(m, 'w');
+  if (await lightOver()) return;
+  setStatus('흑이 움직인다 — 보이지 않는다');
+  await wait(420);
+  const bel = belief(truth, sightings(hist, outs, 'b'), 'b');
+  const am = choose(bel, 'clash', level, random);
+  if (am) await lightStep(am, 'b');
+  if (await lightOver()) return;
+  busy = false;
+  setStatus('백의 차례 · 光');
+}
+async function lightOver(): Promise<boolean> {
+  const wk = kingSq(truth, 'w') >= 0, bk = kingSq(truth, 'b') >= 0;
+  if (wk && bk && hist.length <= 200) return false;
+  screen = 'over'; busy = true;
+  stage.showStale(new Map()); stage.sync(truth); // the truth, at last
+  await wait(900);
+  const win = !bk, draw = wk && bk;
+  win ? sound.win() : draw ? sound.tick() : sound.lose();
+  $('screen').className = 'dim';
+  $('screen').innerHTML = '<div class="slate panel"><div class="big ' + (win ? 'win' : draw ? '' : 'lose') + '">' + (win ? '승리' : draw ? '무승부' : '패배') + '</div>'
+    + '<div class="sub">光 · ' + (draw ? '200수' : win ? '흑 킹이 떨어졌다' : '백 킹이 떨어졌다 — 보지 못한 곳에서') + ' · ' + moveNo + '수</div><div class="stack"><button class="cbtn main" id="r-again">다시</button><button class="cbtn" id="r-home">처음으로</button></div></div>';
+  $('r-again').onclick = newGame; $('r-home').onclick = () => title(true);
+  return true;
+}
+
 async function aiTurn() {
   setStatus('흑이 계산 중…');
   await wait(380);
@@ -254,6 +315,8 @@ async function finale() {
 
 // ── tutorial: 실험 노트 (predict → observe → explain) ─────────────────────
 function experiment(i: number) {
+  if (variantBeforeLesson === undefined) variantBeforeLesson = variant;
+  variant = 'clash'; mode = 'clash';
   screen = 'lesson'; exp = i; guess = -1;
   const e = EXPERIMENTS[i];
   resetBoard(e.fen);
@@ -301,14 +364,14 @@ function menu() {
   $('screen').className = 'dim';
   $('screen').innerHTML = '<div class="slate panel"><h2>쉬는 시간</h2><div class="stack">'
     + '<button class="cbtn main" id="m-back">계속</button>'
-    + '<div class="seg" id="m-mode">' + (['clash', 'classic'] as Mode[]).map(x => '<button data-m="' + x + '" class="' + (x === mode ? 'on' : '') + '">' + (x === 'clash' ? '衝 충돌' : '클래식') + '</button>').join('') + '</div>'
+    + '<div class="seg" id="m-mode">' + (['clash', 'light', 'classic'] as Variant[]).map(x => '<button data-m="' + x + '" class="' + (x === variant ? 'on' : '') + '">' + ({ clash: '衝 충돌', light: '光 지연 시야', classic: '클래식' }[x]) + '</button>').join('') + '</div>'
     + '<div class="seg" id="m-level">' + ([1, 2, 3] as Level[]).map(l => '<button data-l="' + l + '" class="' + (l === level ? 'on' : '') + '">' + LEVEL_NAME[l] + '</button>').join('') + '</div>'
     + '<button class="cbtn" id="m-new">새 판</button><button class="cbtn" id="m-tut">실험 노트</button>'
     + '<button class="cbtn" id="m-sound">' + (sound.muted ? '소리 켜기' : '소리 끄기') + '</button><button class="cbtn" id="m-credits">크레딧</button><button class="cbtn" id="m-home">처음으로</button></div></div>';
   $('m-back').onclick = () => { $('screen').innerHTML = ''; $('screen').className = ''; };
   $('m-new').onclick = newGame; $('m-tut').onclick = () => experiment(0); $('m-home').onclick = () => title(true); $('m-credits').onclick = credits;
   $('m-sound').onclick = () => { sound.setMuted(!sound.muted); store.set('muted', sound.muted ? '1' : '0'); menu(); };
-  document.querySelectorAll<HTMLButtonElement>('[data-m]').forEach(b => b.onclick = () => { mode = b.dataset.m as Mode; store.set('mode', mode); newGame(); });
+  document.querySelectorAll<HTMLButtonElement>('[data-m]').forEach(b => b.onclick = () => { variant = b.dataset.m as Variant; variantBeforeLesson = undefined; mode = variant === 'classic' ? 'classic' : 'clash'; store.set('variant', variant); newGame(); });
   document.querySelectorAll<HTMLButtonElement>('[data-l]').forEach(b => b.onclick = () => { level = Number(b.dataset.l) as Level; store.set('level', String(level)); newGame(); });
 }
 $('btn-menu').onclick = menu;

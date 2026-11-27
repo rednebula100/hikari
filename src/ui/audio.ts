@@ -53,6 +53,8 @@ export class Sound {
   stomp(mass: number) { this.tone(70 + 40 / mass, .35, 'sine', .35, { glide: 40 }); this.noise(.25, .25, { from: 400, to: 120 }); }
   sizzle() { this.noise(1.4, .05, { from: 5000, to: 3000, q: .5, attack: .02 }); }
   settle() { this.tone(240, .05, 'triangle', .04); }
+  /** A blind move that found nothing: a hollow knock. */
+  miss() { this.tone(180, .35, 'sine', .08, { glide: 110 }); this.noise(.2, .03, { from: 400 }); }
   check() { this.tone(98, .22, 'sine', .14); this.tone(92, .22, 'sine', .12, { delay: .28 }); }
   win() { [523, 659, 784, 1046].forEach((f, i) => this.tone(f, 1.2, 'sine', .08, { delay: i * .1 })); }
   lose() { this.tone(60, 2.2, 'sine', .15, { glide: 40 }); }

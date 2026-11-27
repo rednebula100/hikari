@@ -88,7 +88,7 @@ export class Stage {
     const cord = new T.Mesh(new T.CylinderGeometry(.015, .015, 6, 6), new T.MeshBasicMaterial({ color: 0x111111 }));
     cord.position.copy(bulbPos).add(new T.Vector3(0, 3.3, 0));
     const cone = new T.Mesh(new T.ConeGeometry(6.2, bulbPos.y, 64, 1, true), new T.ShaderMaterial({
-      transparent: true, depthWrite: false, blending: T.AdditiveBlending, side: T.DoubleSide,
+      transparent: true, depthWrite: false, blending: T.AdditiveBlending, side: T.FrontSide, // invisible from inside, like real light shafts
       uniforms: { tint: { value: new T.Color(0xffc98a) } },
       vertexShader: 'varying float h; varying vec3 n; varying vec3 vw; void main(){ h = uv.y; n = normalize(normalMatrix*normal); vec4 mv = modelViewMatrix*vec4(position,1.); vw = normalize(-mv.xyz); gl_Position = projectionMatrix*mv; }',
       fragmentShader: 'uniform vec3 tint; varying float h; varying vec3 n; varying vec3 vw; void main(){ float rim = pow(1.-abs(dot(n,vw)), 1.5); float a = .045*(1.-rim)*smoothstep(0.,.35,h)*(0.35+0.65*h); gl_FragColor = vec4(tint*a, 1.); }',
@@ -156,6 +156,21 @@ export class Stage {
     for (const [id, m] of this.pieces) if (!live.has(id)) { this.scene.remove(m); this.pieces.delete(id); }
   }
   pieceObject(id: string) { return this.pieces.get(id); }
+  private stale = new Map<string, { age: number; label: HTMLElement }>();
+  /** 光 mode: enemy pieces shown where their light left them — translucent, with an age in moves. */
+  showStale(ages: Map<string, number>) {
+    for (const [id, st] of this.stale) if (!ages.has(id) || !this.pieces.has(id)) { st.label.remove(); this.stale.delete(id); this.restore(id); }
+    for (const [id, age] of ages) {
+      const m = this.pieces.get(id); if (!m) continue;
+      let st = this.stale.get(id);
+      if (!st) { const label = document.createElement('span'); label.className = 'age'; this.host.append(label); st = { age, label }; this.stale.set(id, st); }
+      st.age = age; st.label.textContent = age + '수 전';
+      m.traverse(o => { const x = o as T.Mesh; if (x.isMesh) { if (!x.userData.mat) x.userData.mat = x.material; x.material = STALE; x.castShadow = false; } });
+    }
+  }
+  private restore(id: string) {
+    this.pieces.get(id)?.traverse(o => { const x = o as T.Mesh; if (x.isMesh && x.userData.mat) { x.material = x.userData.mat; x.castShadow = true; } });
+  }
 
   // ── choreography: replay the engine's outcome ──────────────────────────
   clearStrobe() { this.ghosts.clear(); }
@@ -399,8 +414,14 @@ export class Stage {
     for (const h of this.heat.values()) (h.mesh.material as T.MeshBasicMaterial).opacity = h.level * (.55 + .08 * Math.sin(now / 120));
     for (const g of this.ghosts.children) g.visible = true;
     this.chalk?.update(dt);
+    for (const [id, st] of this.stale) {
+      const m = this.pieces.get(id); if (!m) continue;
+      const v = m.position.clone().add(new T.Vector3(0, .05, -.62)).project(this.camera); // at the front edge of the base
+      st.label.style.transform = `translate(${(v.x + 1) / 2 * this.size.w}px,${(1 - v.y) / 2 * this.size.h}px)`;
+    }
     this.renderer.render(this.scene, this.camera);
   }
 }
+const STALE = new T.MeshStandardMaterial({ color: 0xffa0ae, emissive: 0x401018, transparent: true, opacity: .34, depthWrite: false, roughness: .3 });
 const GHOST = new T.MeshBasicMaterial({ color: 0xdfe8ff, transparent: true, opacity: .11, depthWrite: false, blending: T.AdditiveBlending, toneMapped: false });
 export type { Side };
