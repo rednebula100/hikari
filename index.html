@@ -3,28 +3,28 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#06080d">
-<meta name="description" content="光 — 빛의 체스. 체스의 규칙은 그대로, 단 하나: 빛은 한 수에 한 칸만 간다.">
-<title>光</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%2306080d'/%3E%3Ctext x='32' y='46' text-anchor='middle' font-size='40' fill='%23f2d59b' font-family='serif'%3E光%3C/text%3E%3C/svg%3E">
+<meta name="theme-color" content="#05060a">
+<meta name="description" content="衝 — 잡지 마라, 부딪쳐라. 체스의 움직임 그대로, 잡기 대신 운동량. 빛보다 빠른 것은 없다.">
+<title>衝</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%231c2621'/%3E%3Ctext x='32' y='47' text-anchor='middle' font-size='42' fill='%23f3efe2' font-family='serif'%3E衝%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=Noto+Serif+KR:wght@300;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Nanum+Pen+Script&family=Noto+Sans+KR:wght@400;500;700&family=Noto+Serif+KR:wght@300;600&display=swap" rel="stylesheet">
 </head>
 <body>
 <div id="stage"></div>
+<div id="grain"></div>
+<div id="flash"></div>
 <div id="hud" hidden>
-  <div class="logo">光</div>
+  <div class="logo">衝</div>
   <div id="status"></div>
   <div class="tools">
-    <button id="btn-time" class="tool" title="빛 피라미드 (Space)"><svg viewBox="0 0 24 24"><path d="M12 20 3 5h18z M7.5 10.5h9 M10 15h4"/></svg></button>
-    <button id="btn-eye" class="tool" title="잔상 보기 — 적이 보는 나 (E)"><svg viewBox="0 0 24 24"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg></button>
+    <button id="btn-aim" class="tool on" title="조준 판서 켜기/끄기 (A)"><svg viewBox="0 0 24 24"><path d="M3 19 19 5 M14 5h5v5 M5 9c0-2 1-4 4-4"/></svg></button>
     <button id="btn-menu" class="tool" title="메뉴 (Esc)"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
   </div>
-  <div class="tray me" id="tray-me"></div>
-  <div class="tray them" id="tray-them"></div>
+  <div class="case me" id="case-me" title="떨어뜨린 적 기물"></div>
+  <div class="case them" id="case-them" title="잃은 기물"></div>
 </div>
-<div id="lesson" hidden></div>
-<div id="reveal" hidden><span id="reveal-ply"></span><input type="range" id="reveal-range" min="0" max="0" step="1"><button id="reveal-exit" class="pill">닫기</button></div>
+<div id="note" hidden></div>
 <div id="toast" hidden></div>
 <div id="screen"></div>
 <script type="module" src="./src/ui/app.ts"></script>

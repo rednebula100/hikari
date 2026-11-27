@@ -2,10 +2,11 @@
 
 | Item | Use | License |
 |---|---|---|
-| three.js 0.180.0 (incl. `examples/jsm` lines, RoomEnvironment, BufferGeometryUtils) | rendering | MIT — `public/licenses/three.txt` |
-| earcut (bundled by three) | shape triangulation | ISC — `public/licenses/earcut.txt` |
-| Vite | build tool (not shipped) | MIT — `public/licenses/vite.txt` |
-| Noto Serif KR, Noto Sans KR, IBM Plex Mono (Google Fonts, loaded at runtime) | typography | SIL Open Font License 1.1 |
+| "A Beautiful Game" chess set — © 2020 ASWF (MaterialX Project); glTF conversion © 2022 Ed Mackey; via KhronosGroup/glTF-Sample-Assets | 3D board and pieces (`public/assets/ABeautifulGame.glb`, Draco + KTX2 build) | **CC BY 4.0** — attribution shown in the in-game credits |
+| three.js 0.180.0 | rendering, GLTF/Draco/KTX2 loaders | MIT |
+| Draco decoder (`public/decoders/draco`) | mesh decompression | Apache-2.0 |
+| Basis Universal transcoder (`public/decoders/basis`) | texture transcoding | Apache-2.0 |
+| chess.js 1.4.0 (dev only) | test oracle for FIDE rules | BSD-2-Clause |
+| Nanum Pen Script, Noto Sans KR, Noto Serif KR (Google Fonts, runtime) | typography | SIL OFL 1.1 |
 
-All 3D pieces are procedural geometry written for this project. All sounds are
-synthesized at runtime with WebAudio; no audio files are shipped.
+All sounds are synthesized at runtime. No GPL code is used.

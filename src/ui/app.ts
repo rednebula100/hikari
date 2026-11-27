@@ -1,274 +1,333 @@
 import './style.css';
-import { ChessScene, type DisplayPiece, type Mark } from '../render/scene';
-import { Game, beliefBoard, targets, type Kind, type MoveRecord, type Side } from '../chess/game';
-import { chooseMove, rng, LEVEL_NAME, type Level } from '../chess/ai';
-import { LESSONS, lessonGame, parseMove, type Lesson } from '../chess/tutorial';
+import { Stage, X, Z } from '../render/stage';
+import { sketch } from '../render/aim';
+import { fromFen, toFen, legal, make, status, inCheck, kingSq, pseudo, other, name, parse, START, file, rank, type Pos, type Move, type Mode, type Kind, type Side, type Outcome } from '../engine/rules';
+import { choose, rng, LEVEL_NAME, type Level } from '../engine/ai';
+import { EXPERIMENTS } from '../engine/lessons';
+import { gamma } from '../engine/collide';
 import { Sound } from './audio';
 
 const $ = (id: string) => document.getElementById(id)!;
 const store = {
-  get(k: string) { try { return localStorage.getItem('hikari3:' + k); } catch { return null; } },
-  set(k: string, v: string) { try { localStorage.setItem('hikari3:' + k, v); } catch { /* private mode */ } },
+  get(k: string) { try { return localStorage.getItem('chung:' + k); } catch { return null; } },
+  set(k: string, v: string) { try { localStorage.setItem('chung:' + k, v); } catch { /* private mode */ } },
 };
-const GLYPH: Record<Side, Record<Kind, string>> = {
-  w: { K: '♔', Q: '♕', R: '♖', B: '♗', N: '♘', P: '♙' },
-  b: { K: '♚', Q: '♛', R: '♜', B: '♝', N: '♞', P: '♟' },
-};
-const NAME: Record<Kind, string> = { K: '킹', Q: '퀸', R: '룩', B: '비숍', N: '나이트', P: '폰' };
-const OBJ: Record<Kind, string> = { K: '킹을', Q: '퀸을', R: '룩을', B: '비숍을', N: '나이트를', P: '폰을' };
-const ICON_SOUND_ON = '<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z M16 9a4 4 0 0 1 0 6 M18.5 6.5a8 8 0 0 1 0 11"/></svg>';
-const ICON_SOUND_OFF = '<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z M17 9l5 6 M22 9l-5 6"/></svg>';
+const GLYPH: Record<Side, Record<Kind, string>> = { w: { k: '♔', q: '♕', r: '♖', b: '♗', n: '♘', p: '♙' }, b: { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' } };
+const KO: Record<Kind, string> = { k: '킹', q: '퀸', r: '룩', b: '비숍', n: '나이트', p: '폰' };
+const wait = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
 // ── state ────────────────────────────────────────────────────────────────
-type Mode = 'title' | 'play' | 'lesson' | 'over';
-let mode: Mode = 'title';
-let game = new Game();
-let level: Level = (Number(store.get('level')) || 2) as Level;
-let random = rng(1);
-let selected = -1, timeView = false, eyeView = false, busy = false;
-let lastOwn: MoveRecord | null = null;
-let lessonIx = 0, lessonCounter = 0, lessonDone = false;
-let revealPly: number | null = null;
-let toastTimer = 0;
 const sound = new Sound(); sound.setMuted(store.get('muted') === '1');
+const stage = new Stage($('stage'), sound);
+type Screen = 'boot' | 'title' | 'play' | 'lesson' | 'over';
+let screen: Screen = 'boot';
+let mode: Mode = (store.get('mode') as Mode) || 'clash';
+let level: Level = (Number(store.get('level')) || 2) as Level;
+let pos: Pos = fromFen(START);
+let history: string[] = [];
+let busy = false, selected = -1, aimOn = store.get('aim') !== '0', moveNo = 0;
+let board: string[] = [];
+let random = rng(1);
+let exp = 0, expPhase: 'predict' | 'do' | 'explain' = 'predict', guess = -1;
+let toastTimer = 0;
 const tutorialDone = () => store.get('tutorial') === '1';
 
-const scene = new ChessScene($('stage'), onSquare, () => {});
+function toast(msg: string, ms = 2400) {
+  const t = $('toast'); t.textContent = msg; t.hidden = false; t.style.animation = 'none'; void t.offsetWidth; t.style.animation = '';
+  clearTimeout(toastTimer); toastTimer = window.setTimeout(() => (t.hidden = true), ms);
+}
+function setStatus(text: string, danger = false) { const s = $('status'); s.textContent = text; s.classList.toggle('danger', danger); }
 
-// ── view → scene ─────────────────────────────────────────────────────────
-function lesson(): Lesson | null { return mode === 'lesson' ? LESSONS[lessonIx] : null; }
+// ── boot ────────────────────────────────────────────────────────────────
+async function boot() {
+  $('screen').className = '';
+  $('screen').innerHTML = '<div class="loading">실험실 불을 켜는 중…<div class="bar"><i id="bar"></i></div></div>';
+  stage.lampFlicker(false);
+  try { await stage.load(f => { const b = document.getElementById('bar'); if (b) b.style.width = Math.round(f * 100) + '%'; }); }
+  catch (e) { $('screen').innerHTML = '<div class="loading">3D 체스 세트를 불러오지 못했습니다.<br><small>' + String(e) + '</small></div>'; throw e; }
+  await document.fonts?.ready;
+  stage.sync(pos);
+  title(false);
+}
 
-function render() {
-  const pieces: DisplayPiece[] = [];
-  const marks: Mark[] = [];
-  let eye = game.view('w').king;
-  if (revealPly !== null) {
-    for (const p of game.snaps[revealPly]) if (p.alive) pieces.push({ key: p.id, kind: p.kind, side: p.side, sq: p.sq, look: 'solid', depth: 0 });
-    const m = game.moves[revealPly - 1]; if (m) marks.push({ sq: m.from, kind: 'last' }, { sq: m.landed, kind: 'last' });
-    eye = game.snaps[revealPly].find(p => p.side === 'w' && p.kind === 'K')?.sq ?? eye;
-  } else {
-    const v = game.view('w');
-    for (const p of v.own) pieces.push({ key: p.id, kind: p.kind, side: p.side, sq: p.sq, look: 'solid', depth: 0 });
-    for (const e of v.enemy) if (e.alive) {
-      const depth = v.ply - e.seenAt;
-      pieces.push({ key: e.id, kind: e.kind, side: e.side, sq: e.sq, look: e.age === 0 ? 'solid' : 'ghost', depth, age: e.age });
-    }
-    if (eyeView) for (const a of game.afterimage('w')) {
-      const real = v.own.find(p => p.id === a.id);
-      if (a.alive && (!real || real.sq !== a.sq)) pieces.push({ key: 'echo-' + a.id, kind: a.kind, side: a.side, sq: a.sq, look: 'echo', depth: 0 });
-    }
-    if (lastOwn) marks.push({ sq: lastOwn.from, kind: 'last' }, { sq: lastOwn.landed, kind: 'last' });
-    const sel = v.own.find(p => p.sq === selected);
-    if (sel) {
-      marks.push({ sq: sel.sq, kind: 'select' });
-      const b = beliefBoard(v);
-      for (const t of targets(sel, b)) marks.push({ sq: t, kind: b[t] && b[t]!.side !== 'w' ? 'capture' : 'move' });
-    }
-    const l = lesson();
-    if (l?.hint && !lessonDone) for (const h of l.hint) { const { from } = parseMove(h + 'a1'); marks.push({ sq: from, kind: 'hint' }); }
+// ── title sequence: switch, flicker, Newton's cradle, chalk 衝 ───────────
+let titleToken = 0;
+async function title(instant: boolean) {
+  screen = 'title'; busy = false; selected = -1;
+  const token = ++titleToken;
+  $('hud').hidden = true; $('note').hidden = true; stage.chalk.clearNow(); stage.clearStrobe();
+  stage.writeBlackboard([]); board = [];
+  const demo = fromFen('8/8/8/8/Q2qqqq1/8/8/8 w - - 0 1');
+  stage.sync(demo); stage.resetCamera(); stage.aimZ = -.6;
+  $('screen').className = ''; $('screen').innerHTML = '';
+  const skip = () => { if (token === titleToken) { titleToken++; showTitleMenu(true); stage.lampFlicker(true); } };
+  $('screen').onclick = skip;
+  if (instant || stage.reduced) { stage.lampFlicker(true); showTitleMenu(true); return; }
+  stage.lampFlicker(false); await wait(500); if (token !== titleToken) return;
+  sound.unlock(); sound.switchOn();
+  for (const [on, ms] of [[true, 70], [false, 90], [true, 60], [false, 160], [true, 0]] as const) { stage.lampFlicker(on); await wait(ms); }
+  if (token !== titleToken) return;
+  sound.ambience(true);
+  await wait(700); if (token !== titleToken) return;
+  const m = pseudo(demo).find(x => name(x.from) === 'a4' && name(x.to) === 'd4')!; // demo has no kings: pseudo-legal
+  const r = make(demo, m, 'clash');
+  await stage.play(demo, r.out, r.pos);
+  if (token !== titleToken) return;
+  sound.chalk(1800);
+  showTitleMenu(false);
+}
+function showTitleMenu(instant: boolean) {
+  screen = 'title';
+  $('screen').onclick = null;
+  $('screen').className = '';
+  $('screen').innerHTML = '<div class="title' + (instant ? ' instant' : '') + '"><svg viewBox="0 0 300 300"><text x="150" y="245" text-anchor="middle">衝</text></svg>'
+    + '<div class="motto">잡지 마라. 부딪쳐라.</div><div class="buttons"><button class="cbtn main" id="t-start">시작</button><button class="cbtn" id="t-tut">튜토리얼</button></div></div>'
+    + '<div class="corner l">v0.4 · 밤의 물리 실험실</div><div class="corner r"><button id="t-sound">' + (sound.muted ? '소리 켜기' : '소리 끄기') + '</button> · <button id="t-credits">크레딧</button></div>';
+  $('t-start').onclick = () => { sound.unlock(); if (tutorialDone()) newGame(); else { toast('처음이군요 — 실험 노트부터 펼칩니다'); experiment(0); } };
+  $('t-tut').onclick = () => { sound.unlock(); experiment(0); };
+  $('t-sound').onclick = () => { sound.setMuted(!sound.muted); store.set('muted', sound.muted ? '1' : '0'); showTitleMenu(true); };
+  $('t-credits').onclick = credits;
+}
+function credits() {
+  $('screen').className = 'dim';
+  $('screen').innerHTML = '<div class="slate panel"><h2>크레딧</h2><div class="credits">'
+    + '<p><b>체스 세트</b> — "A Beautiful Game", © 2020 ASWF (MaterialX Project), glTF 변환 © 2022 Ed Mackey. <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>, <a href="https://github.com/KhronosGroup/glTF-Sample-Assets" target="_blank" rel="noopener">Khronos glTF Sample Assets</a>.</p>'
+    + '<p><b>서체</b> — Nanum Pen Script, Noto Sans KR, Noto Serif KR (SIL OFL 1.1).</p>'
+    + '<p><b>라이브러리</b> — three.js (MIT), Draco & Basis Universal 디코더 (Apache-2.0). 규칙 검증 — chess.js (BSD-2).</p>'
+    + '<p><b>소리</b> — 전부 실시간 합성.</p></div><div class="stack"><button class="cbtn" id="c-back">돌아가기</button></div></div>';
+  $('c-back').onclick = () => (screen === 'title' ? showTitleMenu(true) : ($('screen').innerHTML = ''));
+}
+
+// ── a game ───────────────────────────────────────────────────────────────
+function resetBoard(fen: string) {
+  titleToken++;
+  pos = fromFen(fen); history = []; moveNo = 0; selected = -1; busy = false;
+  stage.chalk.clearNow(); stage.clearStrobe(); stage.sync(pos);
+  $('case-me').innerHTML = ''; $('case-them').innerHTML = '';
+  board = []; stage.writeBlackboard(board);
+}
+function newGame() {
+  screen = 'play'; random = rng((Math.random() * 2 ** 31) >>> 0);
+  resetBoard(START);
+  $('screen').innerHTML = ''; $('screen').className = ''; $('note').hidden = true; $('hud').hidden = false;
+  stage.resetCamera(); stage.aimZ = -.7; stage.lampFlicker(true); sound.ambience(true);
+  setStatus(mode === 'clash' ? '백의 차례' : '백의 차례 · 클래식');
+}
+
+function targetsOf(from: number) { return legal(pos, mode).filter(m => m.from === from); }
+function drawSelection() {
+  const c = stage.chalk; c.clearNow();
+  if (selected < 0) return;
+  c.circle([X(selected), Z(selected)], .44, { dur: 120, alpha: .9 });
+  for (const m of targetsOf(selected)) {
+    if (m.promo && m.promo !== 'q') continue;
+    if (m.flag === 'c') c.circle([X(m.to), Z(m.to)], .4, { dur: 100, alpha: .75, color: '#ffc98a', dash: .1 });
+    else c.circle([X(m.to), Z(m.to)], .09, { dur: 60, alpha: .7 });
   }
-  scene.update({ pieces, marks, eye, timeView, reduced: matchMedia('(prefers-reduced-motion: reduce)').matches });
-  document.body.classList.toggle('teaching', mode === 'lesson');
-  // HUD
-  const st = $('status');
-  st.className = busy ? 'wait' : '';
-  st.innerHTML = '<i></i>' + (revealPly !== null ? '진실 — ' + revealPly + '수' : game.winner ? '경기 종료' : busy ? '상대가 생각 중…' : '당신의 차례');
-  $('btn-time').classList.toggle('on', timeView);
-  $('btn-eye').classList.toggle('on', eyeView);
-  const v = game.view('w');
-  $('tray-me').textContent = v.capturedByMe.map(k => GLYPH.b[k]).join('');
-  $('tray-them').textContent = v.capturedFromMe.map(k => GLYPH.w[k]).join('');
 }
-
-function toast(msg: string, tone: 'good' | 'bad' | '' = '') {
-  const t = $('toast'); t.textContent = msg; t.className = tone; t.hidden = false;
-  t.style.animation = 'none'; void t.offsetWidth; t.style.animation = '';
-  clearTimeout(toastTimer); toastTimer = window.setTimeout(() => (t.hidden = true), 2600);
+function onHover(sq: number) {
+  stage.setHover(sq);
+  if (busy || selected < 0 || (screen !== 'play' && screen !== 'lesson')) return;
+  const m = targetsOf(selected).find(x => x.to === sq && (!x.promo || x.promo === 'q'));
+  if (m && aimOn) sketch(stage.chalk, pos, m, mode, { newton: screen === 'lesson' && EXPERIMENTS[exp].newton });
+  else drawSelection();
+  if (screen === 'lesson' && expPhase === 'do') hint();
 }
-
-// ── input ────────────────────────────────────────────────────────────────
-function onSquare(sq: number, button: number) {
+async function onSquare(sq: number, button: number) {
   sound.unlock();
-  if ((mode !== 'play' && mode !== 'lesson') || revealPly !== null) return;
-  if (button === 2 || sq < 0) { selected = -1; return render(); }
-  if (busy || game.winner || game.toMove !== 'w' || lessonDone) return;
-  const v = game.view('w');
-  const own = v.own.find(p => p.sq === sq);
-  if (own) { selected = own.sq; sound.tick(); return render(); }
-  const sel = v.own.find(p => p.sq === selected);
-  if (!sel) return;
-  if (!targets(sel, beliefBoard(v)).includes(sq)) { selected = -1; return render(); }
-  playerMove(sel.sq, sq);
+  if (busy || (screen !== 'play' && screen !== 'lesson') || pos.turn !== 'w') return;
+  if (screen === 'lesson' && expPhase !== 'do') return;
+  if (button === 2 || sq < 0) { selected = -1; drawSelection(); return; }
+  const own = pos.board[sq];
+  if (own?.side === 'w' && sq !== selected) { selected = sq; sound.tick(); drawSelection(); if (screen === 'lesson') hint(); return; }
+  if (selected < 0) return;
+  const ms = targetsOf(selected).filter(m => m.to === sq);
+  if (!ms.length) { selected = -1; drawSelection(); return; }
+  if (screen === 'lesson') {
+    const e = EXPERIMENTS[exp];
+    if (e.id !== 'move' && (name(selected) !== e.move[0] || name(sq) !== e.move[1])) { toast('이번 실험은 분필로 표시된 수로 해 보세요'); return; }
+  }
+  const m = ms.length > 1 ? await promotion(ms) : ms[0];
+  if (m) await commit(m);
+}
+function promotion(ms: Move[]): Promise<Move | null> {
+  return new Promise(res => {
+    $('screen').className = 'dim';
+    $('screen').innerHTML = '<div class="slate panel"><h2>승진</h2><div class="promo">' + (['q', 'r', 'b', 'n'] as Kind[]).map(k => '<button data-k="' + k + '">' + GLYPH.w[k] + '</button>').join('') + '</div></div>';
+    document.querySelectorAll<HTMLButtonElement>('[data-k]').forEach(b => b.onclick = () => { $('screen').innerHTML = ''; $('screen').className = ''; res(ms.find(m => m.promo === b.dataset.k) ?? null); });
+  });
 }
 
-function describe(r: MoveRecord, mine: boolean) {
-  if (!mine) return null;
-  const vic = r.captured ? NAME[r.captured.kind] : '';
-  if (r.outcome === 'intercept') return ['보이지 않던 ' + OBJ[r.captured!.kind] + ' 잡았다', 'good'] as const;
-  if (r.outcome === 'capture') return [vic + ' 포획', 'good'] as const;
-  if (r.outcome === 'miss') return ['빗나감 — 그곳엔 이미 아무도 없었다', 'bad'] as const;
-  if (r.outcome === 'blocked') return ['막힘 — 보이지 않던 기물이 앞을 막고 있다', 'bad'] as const;
-  return null;
+function specimen(side: Side, kind: Kind, label: string) {
+  const el = document.createElement('div'); el.className = 'spec';
+  el.innerHTML = '<b>' + GLYPH[side][kind] + '</b><small>' + label + '</small>';
+  $(side === 'b' ? 'case-me' : 'case-them').append(el);
 }
-
-function playerMove(from: number, to: number) {
-  const r = game.play('w', from, to);
-  lastOwn = r; selected = -1;
-  const d = describe(r, true);
-  if (r.captured) { sound.capture(); scene.flash(r.landed, 0xf2d59b); } else if (r.outcome === 'miss' || r.outcome === 'blocked') { sound.miss(); scene.flash(r.from, 0xff637e); } else sound.move();
-  if (d) toast(d[0], d[1]);
-  render();
-  if (checkLesson(r)) return;
-  if (finish()) return;
-  enemyTurn();
-}
-
-function enemyTurn() {
-  busy = true; render();
-  setTimeout(() => {
-    const l = lesson();
-    let r: MoveRecord | null = null;
-    if (l && !l.ai) {
-      const s = l.script ?? [];
-      for (let i = 0; i < s.length && !r; i++) {
-        const { from, to } = parseMove(s[(lessonCounter + i) % s.length]);
-        try { r = game.play('b', from, to); lessonCounter += i + 1; } catch { /* not possible now */ }
-      }
-      if (!r) { const m = chooseMove(game.view('b'), 1, random); if (m) r = game.play('b', m.from, m.to); }
-    } else {
-      const m = chooseMove(game.view('b'), l?.ai ?? level, random);
-      if (m) r = game.play('b', m.from, m.to);
+function record(before: Pos, out: Outcome) {
+  const mover = before.board[out.move.from]!;
+  const tag = (mover.side === 'w' ? moveNo + '. ' : moveNo + '… ') + KO[mover.kind] + ' ' + name(out.move.from) + '→' + name(out.move.to);
+  if (out.clash) {
+    const g = gamma(out.clash.speed);
+    const fell = out.removed.map(p => KO[p.kind]).join('·');
+    board.push(tag + '   v=' + out.clash.speed.toFixed(2) + (g > 1.1 ? ' (γ ' + g.toFixed(2) + ')' : '') + (fell ? '   ⇒ ' + fell + ' 낙하' : '   ⇒ 밀어냄'));
+    for (const p of out.removed) {
+      const tr = out.clash.sim.tracks.find(t => t.id === p.id);
+      specimen(p.side, p.kind, (tr?.exit ? Math.abs(tr.exit.v).toFixed(2) + '칸/턴 · ' : '') + moveNo + '수');
     }
-    busy = false;
-    if (r?.captured) { sound.loss(); toast(OBJ[r.captured.kind] + ' 잃었다 — ' + 'abcdefgh'[r.landed & 7] + ((r.landed >> 3) + 1), 'bad'); scene.flash(r.landed, 0xff637e); }
-    else sound.enemy();
-    render();
-    if (r) checkLesson(null);
-    finish();
-  }, 420 + Math.random() * 280);
+  } else if (out.removed.length) {
+    board.push(tag + (out.stomp ? '   낙하 공격 · 열' : '   잡음'));
+    for (const p of out.removed) specimen(p.side, p.kind, (out.stomp ? '낙하 · ' : '') + moveNo + '수');
+  }
+  stage.writeBlackboard(board);
 }
 
-function finish() {
-  if (!game.winner) return false;
-  if (mode === 'lesson') { checkLesson(null); if (!lessonDone && game.winner !== 'w') { toast('다시 해봅시다', 'bad'); setTimeout(() => startLesson(lessonIx), 1400); } return true; }
-  mode = 'over';
-  setTimeout(showResult, 900);
+async function commit(m: Move) {
+  busy = true; selected = -1;
+  stage.chalk.erase(200); sound.chalk(180);
+  await play(m);
+  if (screen === 'lesson') { busy = false; return explain(); }
+  if (await finished()) return;
+  await aiTurn();
+}
+async function play(m: Move) {
+  const before = pos;
+  if (before.turn === 'w') moveNo++;
+  const r = make(before, m, mode);
+  history.push(toFen(before, false));
+  await stage.play(before, r.out, r.pos);
+  pos = r.pos;
+  record(before, r.out);
+}
+async function aiTurn() {
+  setStatus('흑이 계산 중…');
+  await wait(380);
+  const m = choose(pos, mode, level, random, history);
+  if (!m) { busy = false; return; }
+  await play(m);
+  if (await finished()) return;
+  busy = false;
+  if (inCheck(pos, mode)) { sound.check(); setStatus('체크 — 킹이 떨어질 위기', true); cracks(); }
+  else setStatus('백의 차례');
+}
+/** Red chalk cracks between the threatened king and its nearest cliff edge. */
+function cracks() {
+  const k = kingSq(pos, pos.turn); if (k < 0) return;
+  const f = file(k), r = rank(k), c = stage.chalk;
+  const dx = f < 4 ? -1 : 1, dz = r < 4 ? -1 : 1;
+  const ex = Math.min(f, 7 - f) < Math.min(r, 7 - r);
+  const pts: [number, number][] = [[X(k), Z(k)]];
+  for (let i = 1; i <= 5; i++) {
+    const t = i / 5, base: [number, number] = ex ? [X(k) - dx * t * (Math.min(f, 7 - f) + .6), Z(k)] : [X(k), Z(k) + dz * t * (Math.min(r, 7 - r) + .6)];
+    pts.push([base[0] + (ex ? 0 : (Math.random() - .5) * .35), base[1] + (ex ? (Math.random() - .5) * .35 : 0)]);
+  }
+  c.path(pts, { color: '#ff9f8f', width: .045, dur: 380 });
+}
+async function finished(): Promise<boolean> {
+  const st = status(pos, mode, history);
+  if (!st.over) return false;
+  screen = 'over'; busy = true;
+  if (st.reason === 'checkmate' && mode === 'clash') await finale();
+  else await wait(600);
+  const win = st.result === '1-0', draw = st.result === '1/2-1/2';
+  win ? sound.win() : draw ? sound.tick() : sound.lose();
+  const why = { checkmate: '체크메이트', stalemate: '스테일메이트', fifty: '50수 규칙', repetition: '3회 반복', material: '기물 부족' }[st.reason];
+  $('screen').className = 'dim';
+  $('screen').innerHTML = '<div class="slate panel"><div class="big ' + (win ? 'win' : draw ? '' : 'lose') + '">' + (win ? '승리' : draw ? '무승부' : '패배') + '</div>'
+    + '<div class="sub">' + why + ' · ' + moveNo + '수</div><div class="stack"><button class="cbtn main" id="r-again">다시</button><button class="cbtn" id="r-home">처음으로</button></div></div>';
+  $('r-again').onclick = newGame; $('r-home').onclick = () => title(true);
   return true;
 }
-
-// ── tutorial ─────────────────────────────────────────────────────────────
-function startLesson(i: number) {
-  const prev = game;
-  lessonIx = i; lessonDone = false; lessonCounter = 0; selected = -1; lastOwn = null; revealPly = null;
-  const l = LESSONS[i];
-  game = lessonGame(l, l.carry ? prev : undefined);
-  if (!l.carry) { timeView = false; eyeView = false; }
-  random = rng(1000 + i);
-  mode = 'lesson'; showHud(true); $('screen').innerHTML = '';
-  scene.resetCamera();
-  lessonCard();
-  render();
-  if (game.toMove === 'b') enemyTurn();
-}
-function lessonCard() {
-  const l = LESSONS[lessonIx], c = $('lesson');
-  c.hidden = false;
-  c.innerHTML = '<div class="step">' + LESSONS.map((_, i) => '<i class="' + (i <= lessonIx ? 'on' : '') + '"></i>').join('') + '</div>'
-    + '<h3>' + l.title + '</h3>'
-    + '<p class="' + (lessonDone ? 'done' : '') + '">' + fmt(lessonDone ? l.done : l.say) + '</p>'
-    + '<div class="row">' + (lessonDone ? '<button class="pill" id="l-next">' + (lessonIx === LESSONS.length - 1 ? '완료' : '다음') + '</button>' : '')
-    + '<button class="pill ghost" id="l-retry">다시</button>'
-    + (tutorialDone() ? '<button class="skip" id="l-skip">튜토리얼 나가기</button>' : '') + '</div>';
-  const n = document.getElementById('l-next'); if (n) n.onclick = nextLesson;
-  $('l-retry').onclick = () => startLesson(lessonIx);
-  const s = document.getElementById('l-skip'); if (s) s.onclick = showTitle;
-}
-const fmt = (s: string) => s.replace(/Space/g, '<kbd>Space</kbd>').replace(/\bE를/g, '<kbd>E</kbd>를');
-function checkLesson(last: MoveRecord | null) {
-  const l = lesson(); if (!l || lessonDone) return false;
-  if (l.goal({ game, last: last ?? lastOwn, timeView, eyeView })) {
-    lessonDone = true; sound.win(); lessonCard(); render(); return true;
+/** The mating blow is actually played: the king goes over the cliff, the lamp dies. */
+async function finale() {
+  const loser = pos.turn, q = { ...pos, board: pos.board.slice(), turn: other(loser), castling: { ...pos.castling } };
+  const kill = pseudo(q).find(m => m.flag === 'c' && kingSq(make(q, m, 'clash').pos, loser) < 0);
+  if (kill) {
+    stage.reduced = false;
+    const r = make(q, kill, 'clash');
+    await stage.play(q, r.out, r.pos);
+    pos = r.pos;
   }
-  return false;
-}
-function nextLesson() {
-  if (lessonIx < LESSONS.length - 1) return startLesson(lessonIx + 1);
-  store.set('tutorial', '1');
-  $('lesson').hidden = true; showHud(false);
-  mode = 'title';
-  $('screen').innerHTML = '<div class="panel"><div class="big win">光</div><h2>튜토리얼 완료</h2><div class="sub">이제 진짜 상대가 기다립니다.</div><div class="stack"><button class="btn main" id="go">시작</button><button class="btn" id="home">처음으로</button></div></div>';
-  $('go').onclick = startGame; $('home').onclick = showTitle;
+  await wait(900);
+  for (const [on, ms] of [[false, 80], [true, 60], [false, 400]] as const) { stage.lampFlicker(on); await wait(ms); }
+  sound.ambience(false);
 }
 
-// ── screens ──────────────────────────────────────────────────────────────
-function showHud(on: boolean) { $('hud').hidden = !on; if (!on) $('lesson').hidden = true; }
-function startGame() {
-  game = new Game(); random = rng((Math.random() * 2 ** 31) >>> 0);
-  mode = 'play'; selected = -1; lastOwn = null; timeView = false; eyeView = false; revealPly = null; busy = false;
-  $('screen').innerHTML = ''; $('lesson').hidden = true; $('reveal').hidden = true; showHud(true); scene.resetCamera(); render();
+// ── tutorial: 실험 노트 (predict → observe → explain) ─────────────────────
+function experiment(i: number) {
+  screen = 'lesson'; exp = i; guess = -1;
+  const e = EXPERIMENTS[i];
+  resetBoard(e.fen);
+  $('screen').innerHTML = ''; $('screen').className = ''; $('hud').hidden = false;
+  stage.resetCamera(); stage.aimZ = -3.3; stage.lampFlicker(true); sound.ambience(true);
+  setStatus(e.title);
+  expPhase = e.predict ? 'predict' : 'do';
+  note();
+  if (expPhase === 'do') hint();
 }
-function showTitle() {
-  mode = 'title'; showHud(false); $('reveal').hidden = true; revealPly = null;
-  game = new Game(); timeView = false; eyeView = false; render();
-  $('screen').innerHTML = '<div class="title"><h1>光</h1><div class="tag">빛 의 체 스</div><div class="buttons">'
-    + '<button class="btn main" id="t-start">시작</button><button class="btn" id="t-tut">튜토리얼</button></div></div>'
-    + '<div class="corner l">v0.3</div><div class="corner r"><button id="t-sound" title="소리">' + (sound.muted ? ICON_SOUND_OFF : ICON_SOUND_ON) + '</button></div>';
-  $('t-start').onclick = () => { sound.unlock(); if (tutorialDone()) startGame(); else { startLesson(0); toast('처음이시군요 — 빛의 규칙부터 배워봅시다'); } };
-  $('t-tut').onclick = () => { sound.unlock(); startLesson(0); };
-  $('t-sound').onclick = () => { sound.setMuted(!sound.muted); store.set('muted', sound.muted ? '1' : '0'); showTitle(); };
+function dots() { return '<div class="dots">' + EXPERIMENTS.map((_, i) => '<i class="' + (i <= exp ? 'on' : '') + '"></i>').join('') + '</div>'; }
+function note() {
+  const e = EXPERIMENTS[exp], n = $('note'); n.hidden = false; n.className = 'slate';
+  const skip = tutorialDone() ? '<button class="skip" id="n-skip">노트 덮기</button>' : '';
+  if (expPhase === 'predict') {
+    n.innerHTML = dots() + '<h3>' + e.title + '</h3><p>예측: ' + e.predict!.q + '</p><div class="opts">'
+      + e.predict!.options.map((o, i) => '<button class="cbtn" data-o="' + i + '">' + o + '</button>').join('') + '</div><div class="row">' + skip + '</div>';
+    n.querySelectorAll<HTMLButtonElement>('[data-o]').forEach(b => b.onclick = () => { guess = Number(b.dataset.o); expPhase = 'do'; note(); hint(); });
+  } else if (expPhase === 'do') {
+    n.innerHTML = dots() + '<h3>' + e.title + '</h3>' + (guess >= 0 ? '<p style="color:var(--dim)">내 예측: ' + e.predict!.options[guess] + '</p>' : '') + '<p>관찰: ' + e.task + '</p><div class="row">' + skip + '</div>';
+  } else {
+    const right = e.predict ? guess === e.predict.answer : true;
+    n.innerHTML = dots() + '<h3>' + e.title + '</h3>' + (e.predict ? '<p class="verdict' + (right ? '' : ' miss') + '">' + (right ? '예측 적중.' : '예측과 달랐다 — 정답: ' + e.predict.options[e.predict.answer]) + '</p>' : '')
+      + '<p>설명: ' + e.explain + '</p><div class="row"><button class="cbtn main" id="n-next">' + (exp === EXPERIMENTS.length - 1 ? '노트 덮고 실전으로' : '다음 실험') + '</button><button class="cbtn" id="n-again">다시</button>' + skip + '</div>';
+    $('n-next').onclick = () => { if (exp < EXPERIMENTS.length - 1) experiment(exp + 1); else { store.set('tutorial', '1'); $('note').hidden = true; newGame(); toast('실전 — 흑은 ' + LEVEL_NAME[level] + ' AI'); } };
+    $('n-again').onclick = () => experiment(exp);
+  }
+  const s = document.getElementById('n-skip'); if (s) s.onclick = () => { $('note').hidden = true; title(true); };
 }
-function showMenu() {
-  if (mode === 'title') return;
-  $('screen').innerHTML = '<div class="panel"><h2>일시정지</h2><div class="sub">' + (mode === 'lesson' ? '튜토리얼' : '상대: ' + LEVEL_NAME[level]) + '</div><div class="stack">'
-    + '<button class="btn main" id="m-back">계속</button>'
-    + (mode !== 'lesson' ? '<div class="seg">' + ([1, 2, 3] as Level[]).map(l => '<button data-l="' + l + '" class="' + (l === level ? 'on' : '') + '">' + LEVEL_NAME[l] + '</button>').join('') + '</div>' : '')
-    + '<button class="btn" id="m-new">' + (mode === 'lesson' ? '이 단계 다시' : '새 게임') + '</button>'
-    + '<button class="btn" id="m-tut">튜토리얼</button>'
-    + '<button class="btn" id="m-sound">' + (sound.muted ? '소리 켜기' : '소리 끄기') + '</button>'
-    + '<button class="btn" id="m-home">처음으로</button></div></div>';
-  $('m-back').onclick = () => ($('screen').innerHTML = '');
-  $('m-new').onclick = () => (mode === 'lesson' ? startLesson(lessonIx) : startGame());
-  $('m-tut').onclick = () => startLesson(0);
-  $('m-sound').onclick = () => { sound.setMuted(!sound.muted); store.set('muted', sound.muted ? '1' : '0'); showMenu(); };
-  $('m-home').onclick = showTitle;
-  document.querySelectorAll<HTMLButtonElement>('[data-l]').forEach(b => b.onclick = () => { level = Number(b.dataset.l) as Level; store.set('level', String(level)); startGame(); });
+function hint() {
+  const e = EXPERIMENTS[exp];
+  const [a, b] = e.move.map(parse);
+  stage.chalk.arrow([X(a), Z(a)], [X(b), Z(b)], { dash: .16, color: '#9fd8ff', alpha: .55, dur: 260 });
 }
-function showResult() {
-  const w = game.winner;
-  const win = w === 'w', draw = w === 'draw';
-  win ? sound.win() : draw ? sound.tick() : sound.lose();
-  const v = game.view('w');
-  $('screen').innerHTML = '<div class="panel"><div class="big ' + (win ? 'win' : draw ? '' : 'lose') + '">' + (win ? '승리' : draw ? '무승부' : '패배') + '</div>'
-    + '<div class="sub">' + Math.ceil(game.ply / 2) + '수 · 잡은 기물 ' + (v.capturedByMe.map(k => GLYPH.b[k]).join('') || '없음') + '</div><div class="stack">'
-    + '<button class="btn main" id="r-truth">진실 보기</button><button class="btn" id="r-again">다시</button><button class="btn" id="r-home">처음으로</button></div></div>';
-  $('r-truth').onclick = () => { $('screen').innerHTML = ''; openReveal(); };
-  $('r-again').onclick = startGame; $('r-home').onclick = showTitle;
-}
-function openReveal() {
-  revealPly = game.ply; timeView = false; eyeView = false;
-  const r = $('reveal'), range = $('reveal-range') as HTMLInputElement;
-  r.hidden = false; range.max = String(game.ply); range.value = String(game.ply);
-  const upd = () => { revealPly = Number(range.value); $('reveal-ply').textContent = revealPly + ' / ' + game.ply; render(); };
-  range.oninput = upd; upd();
-  $('reveal-exit').onclick = () => { r.hidden = true; revealPly = null; showResult(); render(); };
+function explain() {
+  expPhase = 'explain'; busy = false;
+  const e = EXPERIMENTS[exp];
+  if (e.id === 'cliff') toast('킹이 낭떠러지를 벗어났다');
+  note();
 }
 
-// ── controls ─────────────────────────────────────────────────────────────
-function toggleTime() { if (mode === 'title') return; timeView = !timeView; if (timeView) sound.unfold(); render(); checkLesson(null); }
-function toggleEye() { if (mode === 'title') return; eyeView = !eyeView; render(); checkLesson(null); }
-$('btn-time').onclick = toggleTime; $('btn-eye').onclick = toggleEye; $('btn-menu').onclick = showMenu;
+// ── menu & keys ──────────────────────────────────────────────────────────
+function menu() {
+  if (screen === 'title' || screen === 'boot') return;
+  $('screen').className = 'dim';
+  $('screen').innerHTML = '<div class="slate panel"><h2>쉬는 시간</h2><div class="stack">'
+    + '<button class="cbtn main" id="m-back">계속</button>'
+    + '<div class="seg" id="m-mode">' + (['clash', 'classic'] as Mode[]).map(x => '<button data-m="' + x + '" class="' + (x === mode ? 'on' : '') + '">' + (x === 'clash' ? '衝 충돌' : '클래식') + '</button>').join('') + '</div>'
+    + '<div class="seg" id="m-level">' + ([1, 2, 3] as Level[]).map(l => '<button data-l="' + l + '" class="' + (l === level ? 'on' : '') + '">' + LEVEL_NAME[l] + '</button>').join('') + '</div>'
+    + '<button class="cbtn" id="m-new">새 판</button><button class="cbtn" id="m-tut">실험 노트</button>'
+    + '<button class="cbtn" id="m-sound">' + (sound.muted ? '소리 켜기' : '소리 끄기') + '</button><button class="cbtn" id="m-credits">크레딧</button><button class="cbtn" id="m-home">처음으로</button></div></div>';
+  $('m-back').onclick = () => { $('screen').innerHTML = ''; $('screen').className = ''; };
+  $('m-new').onclick = newGame; $('m-tut').onclick = () => experiment(0); $('m-home').onclick = () => title(true); $('m-credits').onclick = credits;
+  $('m-sound').onclick = () => { sound.setMuted(!sound.muted); store.set('muted', sound.muted ? '1' : '0'); menu(); };
+  document.querySelectorAll<HTMLButtonElement>('[data-m]').forEach(b => b.onclick = () => { mode = b.dataset.m as Mode; store.set('mode', mode); newGame(); });
+  document.querySelectorAll<HTMLButtonElement>('[data-l]').forEach(b => b.onclick = () => { level = Number(b.dataset.l) as Level; store.set('level', String(level)); newGame(); });
+}
+$('btn-menu').onclick = menu;
+$('btn-aim').onclick = () => { aimOn = !aimOn; store.set('aim', aimOn ? '1' : '0'); $('btn-aim').classList.toggle('on', aimOn); drawSelection(); };
+$('btn-aim').classList.toggle('on', aimOn);
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { if ($('screen').innerHTML && mode !== 'title' && mode !== 'over') $('screen').innerHTML = ''; else if (selected >= 0) { selected = -1; render(); } else showMenu(); return; }
-  if ($('screen').innerHTML) return;
-  if (e.key === ' ') { e.preventDefault(); toggleTime(); }
-  else if (e.key.toLowerCase() === 'e') toggleEye();
-  else if (e.key.toLowerCase() === 'r') scene.resetCamera();
+  if (e.key === 'Escape') {
+    if ($('screen').innerHTML && screen !== 'title' && screen !== 'over') { $('screen').innerHTML = ''; $('screen').className = ''; }
+    else if (selected >= 0) { selected = -1; drawSelection(); } else menu();
+  } else if (e.key.toLowerCase() === 'a') $('btn-aim').click();
+  else if (e.key.toLowerCase() === 'r') stage.resetCamera();
 });
+stage.onSquare = (s, b) => { void onSquare(s, b); };
+stage.onHover = onHover;
+void boot();
 
-showTitle();
-if (!tutorialDone()) { /* first visit: 시작 leads into the tutorial */ }
-
-if (import.meta.env.DEV) Object.assign(window, { hikari: {
-  get game() { return game; }, scene, startLesson, startGame, showTitle, onSquare,
-  click: (a: string) => { const { from } = parseMove(a + 'a1'); onSquare(from, 0); },
+if (import.meta.env.DEV) Object.assign(window, { chung: {
+  stage, get pos() { return pos; }, newGame, experiment, title, commit, onSquare,
+  click: (s: string) => onSquare(parse(s), 0), hover: (s: string) => onHover(parse(s)),
+  pick: (o: number) => (document.querySelector('[data-o="' + o + '"]') as HTMLButtonElement)?.click(),
+  setMode: (m: Mode) => { mode = m; }, legal: () => legal(pos, mode),
 } });

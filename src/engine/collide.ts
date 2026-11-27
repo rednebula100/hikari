@@ -45,7 +45,8 @@ export function simulateLine(bodies: Body[], n: number, T = 1, opts: { c?: numbe
   const live = bodies.map(b => ({ ...b })).sort((a, b) => a.s - b.s)
   const tracks = new Map<string, Track>(live.map(b => [b.id, { id: b.id, keys: [{ t: 0, s: b.s, v: b.v }] }]))
   const contacts: Contact[] = []
-  const tot = (xs: Body[]) => xs.reduce((a, b) => ({ p: a.p + momentum(b.mass, b.v, c), e: a.e + energy(b.mass, b.v, c) }), { p: 0, e: 0 })
+  const P = (m: number, v: number) => (opts.newton ? m * v : momentum(m, v, c)), E = (m: number, v: number) => (opts.newton ? m * c * c + m * v * v / 2 : energy(m, v, c))
+  const tot = (xs: Body[]) => xs.reduce((a, b) => ({ p: a.p + P(b.mass, b.v), e: a.e + E(b.mass, b.v) }), { p: 0, e: 0 })
   const start = tot(live)
   let t = 0
   for (let guard = 0; guard < 2000; guard++) {
@@ -86,7 +87,7 @@ export function simulateLine(bodies: Body[], n: number, T = 1, opts: { c?: numbe
   for (const b of live) { tracks.get(b.id)!.keys.push({ t: T, s: b.s, v: b.v }); final.set(b.id, Math.min(n - 1, Math.max(0, Math.round(b.s)))) }
   const end = tot(live)
   const exited = [...tracks.values()].filter(tr => tr.exit).map(tr => ({ m: bodies.find(b => b.id === tr.id)!.mass, v: tr.exit!.v }))
-  const p1 = end.p + exited.reduce((a, x) => a + momentum(x.m, x.v, c), 0)
-  const e1 = end.e + exited.reduce((a, x) => a + energy(x.m, x.v, c), 0)
+  const p1 = end.p + exited.reduce((a, x) => a + P(x.m, x.v), 0)
+  const e1 = end.e + exited.reduce((a, x) => a + E(x.m, x.v), 0)
   return { tracks: [...tracks.values()], contacts, final, p0: start.p, p1, e0: start.e, e1 }
 }

@@ -1,7 +1,7 @@
 // FIDE chess rules with a pluggable capture model.
 //   'classic' — orthodox chess (verified against chess.js by perft/oracle tests)
 //   'clash'   — 衝: captures become relativistic 1D collisions; knights stomp; off-board = removed.
-import { runSpeed, simulateLine, type LineResult } from './collide.ts'
+import { runSpeed, runSpeedNewton, simulateLine, type LineResult } from './collide.ts'
 
 export type Side = 'w' | 'b'
 export type Kind = 'p' | 'n' | 'b' | 'r' | 'q' | 'k'
@@ -181,7 +181,7 @@ export function lineThrough(to: number, df: number, dr: number): number[] {
   return out
 }
 
-export function make(p0: Pos, m: Move, mode: Mode): { pos: Pos; out: Outcome } {
+export function make(p0: Pos, m: Move, mode: Mode, opts: { newton?: boolean } = {}): { pos: Pos; out: Outcome } {
   const p = clone(p0), b = p.board, me = p.turn
   const mover = b[m.from]!
   const out: Outcome = { move: m, removed: [] }
@@ -206,11 +206,11 @@ export function make(p0: Pos, m: Move, mode: Mode): { pos: Pos; out: Outcome } {
     const df = Math.sign(file(m.to) - file(m.from)), dr = Math.sign(rank(m.to) - rank(m.from))
     const line = lineThrough(m.to, df, dr)
     const idx = (s: number) => line.indexOf(s)
-    const run = cheb(m.from, m.to), speed = runSpeed(run)
+    const run = cheb(m.from, m.to), speed = opts.newton ? runSpeedNewton(run) : runSpeed(run)
     b[m.from] = null
     const bodies = line.filter(s => b[s]).map(s => ({ id: b[s]!.id, mass: MASS[b[s]!.kind], s: idx(s), v: 0 }))
     bodies.push({ id: mover.id, mass: MASS[mover.kind], s: idx(m.to) - 1, v: speed })
-    const sim = simulateLine(bodies, line.length)
+    const sim = simulateLine(bodies, line.length, 1, { newton: opts.newton })
     const pieces = new Map<string, Piece>([[mover.id, mover]])
     const origin = new Map<string, number>([[mover.id, m.from]])
     for (const s of line) if (b[s]) { pieces.set(b[s]!.id, b[s]!); origin.set(b[s]!.id, s); b[s] = null }
