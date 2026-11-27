@@ -4,16 +4,21 @@ export class Sound {
   private out: GainNode | null = null;
   private hum: { o: OscillatorNode; g: GainNode }[] = [];
   muted = false;
+  volume = .8;
+  private pitch = 1;
   private ensure() {
     if (this.ctx) return this.ctx;
     const AC = window.AudioContext; if (!AC) return null;
     this.ctx = new AC();
-    this.out = this.ctx.createGain(); this.out.gain.value = this.muted ? 0 : .55;
+    this.out = this.ctx.createGain(); this.out.gain.value = this.muted ? 0 : .7 * this.volume;
     const comp = this.ctx.createDynamicsCompressor(); this.out.connect(comp); comp.connect(this.ctx.destination);
     return this.ctx;
   }
   unlock() { const c = this.ensure(); if (c?.state === 'suspended') void c.resume(); }
-  setMuted(m: boolean) { this.muted = m; if (this.out) this.out.gain.value = m ? 0 : .55; }
+  setMuted(m: boolean) { this.muted = m; if (this.out) this.out.gain.value = m ? 0 : .7 * this.volume; }
+  setVolume(v: number) { this.volume = v; this.setMuted(this.muted); }
+  /** The lamp hum rises a semitone per problem tier (the room gets colder and tenser). */
+  setPitch(semis: number) { this.pitch = 2 ** (semis / 12); this.hum.forEach((h, i) => h.o.frequency.setTargetAtTime(60 * (i + 1) * this.pitch, this.ctx!.currentTime, .3)); }
   private tone(f: number, dur: number, type: OscillatorType, vol: number, o: { glide?: number; delay?: number; attack?: number } = {}) {
     const c = this.ensure(); if (!c || !this.out || this.muted) return;
     const t = c.currentTime + (o.delay ?? 0), osc = c.createOscillator(), g = c.createGain();
@@ -35,7 +40,7 @@ export class Sound {
   ambience(on: boolean) {
     const c = this.ensure(); if (!c || !this.out) return;
     if (on && !this.hum.length) for (const [f, v] of [[60, .018], [120, .01], [180, .004]] as const) {
-      const o = c.createOscillator(), g = c.createGain(); o.frequency.value = f; g.gain.value = v; o.connect(g); g.connect(this.out); o.start(); this.hum.push({ o, g });
+      const o = c.createOscillator(), g = c.createGain(); o.frequency.value = f * this.pitch; g.gain.value = v; o.connect(g); g.connect(this.out); o.start(); this.hum.push({ o, g });
     }
     if (!on) { this.hum.forEach(h => h.o.stop()); this.hum = []; }
   }
@@ -61,4 +66,16 @@ export class Sound {
   /** The pyramid opens: a rising tone. */
   unfold() { this.tone(220, .5, 'sine', .05, { glide: 520 }); }
   tick() { this.tone(1500, .03, 'sine', .03); }
+  /** UI hover: a dry, tiny click. */
+  hover() { this.tone(2400, .012, 'square', .008); }
+  /** Seal: a wooden thud + paper. */
+  stamp() { this.tone(110, .18, 'sine', .3, { glide: 60 }); this.noise(.09, .22, { from: 900, to: 300, q: .8 }); this.noise(.25, .04, { from: 3000, delay: .03, q: .5 }); }
+  /** Codex discovery: two glassy partials. */
+  found() { this.tone(1318, .9, 'sine', .05); this.tone(1975, .7, 'sine', .035, { delay: .07 }); this.stamp(); }
+  /** Problem failed: a dry pencil scratch. */
+  fail() { this.noise(.32, .08, { from: 1600, to: 700, q: 1.2 }); this.tone(150, .25, 'triangle', .06, { glide: 110 }); }
+  /** Paper tearing (★10 failure). */
+  tear() { this.noise(.5, .12, { from: 2500, to: 900, q: .6, attack: .02 }); this.noise(.3, .08, { from: 4000, delay: .15, q: .7 }); }
+  /** Easter egg spin: a short whoosh. */
+  whoosh() { this.noise(.45, .05, { from: 600, to: 2400, q: .8, attack: .12 }); }
 }

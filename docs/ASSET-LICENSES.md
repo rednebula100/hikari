@@ -7,6 +7,8 @@
 | Draco decoder (`public/decoders/draco`) | mesh decompression | Apache-2.0 |
 | Basis Universal transcoder (`public/decoders/basis`) | texture transcoding | Apache-2.0 |
 | chess.js 1.4.0 (dev only) | test oracle for FIDE rules | BSD-2-Clause |
-| Nanum Pen Script, Noto Sans KR, Noto Serif KR (Google Fonts, runtime) | typography | SIL OFL 1.1 |
+| IBM Plex Sans KR, IBM Plex Mono, Noto Serif KR, Nanum Pen Script (Google Fonts, runtime) | typography | SIL OFL 1.1 |
+| GSAP 3.13 (+ ScrambleText) | UI motion | GreenSock Standard License (free, incl. plugins) |
+| `public/brand/rednebula-mark.webp` | studio logo (cropped from rednebula100/rednebula100 `logo.png`) | © Red Nebula — owner's own mark |
 
 All sounds are synthesized at runtime. No GPL code is used.

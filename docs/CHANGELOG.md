@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.5.0 — problem book, codex, UI v2 (2026-11-27)
+- **당구 문제** — 100 problems in ten tiers (★1 프록시마 M … ★10 WR 104), mined by `tools/gen-puzzles.ts` from random
+  billiard layouts and endgames and solved exhaustively by the engine (★10 up to 77,256 sequences, one answer).
+  Seals accumulate with difficulty: 半 first-contact sketch · 速 Newtonian (lying) sketch · 盲 no sketch · 二/三 several
+  moves · 宣 declare the whole sequence first, then run it · 敵 Black defends (mate in 1/2) · 一 one try, failure tears the
+  sheet until tomorrow. The lamp colour temperature and the hum pitch rise with the tier. Solving shows the honest rarity.
+  `tests/puzzles.test.ts` re-verifies every problem (solution, counts, no shorter solution, Newton traps, mate defence).
+- **현상 도감** — 48 phenomena in six groups detected by a pure function (`src/content/codex.ts`, tested); each discovery
+  is photographed from the live view, with formula, explanation, first sighting and count.
+- **UI v2 「실험 기록지」** — after researching Zachtronics, Into the Breach, Balatro and Obra Dinn: square corners,
+  hairlines and crop marks, IBM Plex Sans KR / Plex Mono / Noto Serif KR, one vermilion seal colour, numbered index menus
+  with instant inversion, GSAP motion (short, firm; only seals slam). Chalk stays on the 3D board.
+- Red Nebula studio intro (skippable; settings: every launch / first only).
+- Settings: quality presets 자동(default)/최고/높음/중간/낮음, FPS line (off by default), sound, volume, aim, intro, reset.
+- Tutorial step 00 「조작」: live checklist (click, drag, wheel, right-click) and the key map.
+- Easter egg: click 衝 — it turns over in 3D; ten turns and it burns with a flowing gradient.
+
 ## 0.4.2 — performance pass (2026-11-27)
 Measured at 1024×768 on the dev machine (synchronous render + GPU flush, 30-frame average):
 idle 40 ms → 24 ms (and rendered at half rate while nothing moves), moving 40+ ms → 30 ms; triangles/frame 3M+ → 0.97M.

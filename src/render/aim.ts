@@ -8,10 +8,14 @@ import type { Chalk } from './chalk';
 type P = [number, number];
 const KO: Record<string, string> = { p: '폰', n: '나이트', b: '비숍', r: '룩', q: '퀸', k: '킹' };
 
-export function sketch(chalk: Chalk, pos: Pos, m: Move, mode: Mode, o: { newton?: boolean; numbers?: boolean } = {}) {
+/**
+ * o.half — 半 seal: only the run-up and the first contact are sketched.
+ * o.classical — 速 seal: the whole sketch is computed with Newtonian mechanics (and says so).
+ */
+export function sketch(chalk: Chalk, pos: Pos, m: Move, mode: Mode, o: { newton?: boolean; numbers?: boolean; half?: boolean; classical?: boolean } = {}) {
   chalk.clearNow();
   const w = (s: number): P => [X(s), Z(s)];
-  const r = make(pos, m, mode);
+  const r = make(pos, m, mode, { newton: o.classical });
   if (!r.out.clash && !r.out.stomp) { // ordinary move: a quiet dotted path
     chalk.path([w(m.from), w(m.to)], { dash: .12, alpha: .55, dur: 140 });
     chalk.circle(w(m.to), .2, { alpha: .7, delay: 120, dur: 120 });
@@ -32,6 +36,12 @@ export function sketch(chalk: Chalk, pos: Pos, m: Move, mode: Mode, o: { newton?
   chalk.arrow(w(m.from), at(att.keys[0].s), { dash: .14, dur: 200, alpha: .8 })
   const g = gamma(cl.speed)
   chalk.text(`v ${cl.speed.toFixed(2)}${g > 1.15 ? '  γ' + g.toFixed(2) : ''}`, [(w(m.from)[0] + at(att.keys[0].s)[0]) / 2 + .55, (w(m.from)[1] + at(att.keys[0].s)[1]) / 2], { size: .36, delay: 160 })
+  if (o.classical) chalk.text('뉴턴의 계산', [w(m.from)[0], w(m.from)[1] - .75], { size: .3, color: '#c9d7ff', alpha: .8 })
+  if (o.half) {
+    const k = cl.sim.contacts[0]
+    if (k) { chalk.circle(at(k.s), .3, { delay: 260, dur: 140 }); chalk.text('?', [at(k.s)[0], at(k.s)[1] + .62], { size: .5, delay: 380 }) }
+    return
+  }
   // ② outcome of every body that moves
   let delay = 300
   for (const tr of cl.sim.tracks) {

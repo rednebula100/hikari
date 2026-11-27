@@ -16,12 +16,12 @@ export interface ChessSet {
   make(kind: Kind, side: Side): T.Object3D
 }
 
-export async function loadSet(renderer: T.WebGLRenderer, onProgress?: (f: number) => void): Promise<ChessSet> {
+export async function loadSet(renderer: T.WebGLRenderer, onProgress?: (f: number) => void, hipoly = false): Promise<ChessSet> {
   const base = import.meta.env.BASE_URL;
   const draco = new DRACOLoader().setDecoderPath(base + 'decoders/draco/');
   const ktx2 = new KTX2Loader().setTranscoderPath(base + 'decoders/basis/').detectSupport(renderer);
   const loader = new GLTFLoader().setDRACOLoader(draco).setKTX2Loader(ktx2);
-  const file = new URLSearchParams(location.search).has('hipoly') ? 'ABeautifulGame.glb' : 'ABeautifulGame.lod.glb';
+  const file = hipoly || new URLSearchParams(location.search).has('hipoly') ? 'ABeautifulGame.glb' : 'ABeautifulGame.lod.glb';
   const gltf = await loader.loadAsync(base + 'assets/' + file, e => { if (e.total) onProgress?.(e.loaded / e.total); });
   draco.dispose(); ktx2.dispose();
   const root = gltf.scene;

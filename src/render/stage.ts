@@ -13,6 +13,17 @@ const wait = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
 interface Anim { update(now: number): boolean } // return false when finished
 
+export type Quality = 'auto' | 'ultra' | 'high' | 'mid' | 'low';
+/** Tungsten-to-blue colour of a black body (approximation after Tanner Helland), linear-ish sRGB 0..1. */
+export function kelvin(k: number): T.Color {
+  const t = k / 100;
+  const r = t <= 66 ? 255 : 329.698727446 * (t - 60) ** -0.1332047592;
+  const g = t <= 66 ? 99.4708025861 * Math.log(t) - 161.1195681661 : 288.1221695283 * (t - 60) ** -0.0755148492;
+  const b = t >= 66 ? 255 : t <= 19 ? 0 : 138.5177312231 * Math.log(t - 10) - 305.0447927307;
+  const c = (x: number) => Math.min(255, Math.max(0, x)) / 255;
+  return new T.Color().setRGB(c(r), c(g), c(b), T.SRGBColorSpace);
+}
+
 export class Stage {
   readonly renderer: T.WebGLRenderer;
   readonly scene = new T.Scene();
@@ -40,6 +51,8 @@ export class Stage {
   private look = new T.Vector3(0, 0, -.9);
   /** Where the seat camera aims (moves toward White when the notebook covers the bottom of the screen). */
   aimZ = -1.4;
+  /** Sideways offset of the aim (the title menu sits on the left). Eased. */
+  aimX = 0; private aimXNow = 0;
   private drag?: { x: number; y: number; moved: boolean; button: number };
   private hoverSq = -1;
   // ── performance state ─────────────────────────────────────────────────
@@ -52,6 +65,10 @@ export class Stage {
   readonly perf = { fps: 60, ms: 16, level: 0, steps: [] as string[] };
   private perfWindow: number[] = [];
   private perfEl: HTMLElement | null = null;
+  /** Quality preset. 'auto' = full quality with the governor as a last resort; the others are fixed. */
+  quality: Quality = 'auto';
+  private cone!: T.Mesh<T.ConeGeometry, T.ShaderMaterial>;
+  private lampOn = true; private lampColor = new T.Color(0xffc98a);
   private tmpA = new T.Vector3(); private tmpB = new T.Vector3(); private tmpC = new T.Vector3();
   private hoverMesh = new T.Mesh(new T.PlaneGeometry(.96, .96), new T.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: .06, depthWrite: false }));
   onSquare: (sq: number, button: number) => void = () => {};
@@ -75,10 +92,11 @@ export class Stage {
     requestAnimationFrame(t => this.loop(t));
   }
 
-  async load(onProgress?: (f: number) => void) {
+  async load(onProgress?: (f: number) => void, hipoly = false) {
     const pm = new T.PMREMGenerator(this.renderer);
     this.scene.environment = pm.fromScene(new RoomEnvironment(), .04).texture; this.scene.environmentIntensity = .22; pm.dispose();
-    this.set = await loadSet(this.renderer, onProgress);
+    this.set = await loadSet(this.renderer, onProgress, hipoly);
+    this.setQuality(this.quality);
     this.surface = this.set.surface;
     this.board = this.set.board; this.scene.add(this.board);
     const box = new T.Box3().setFromObject(this.board);
@@ -105,7 +123,7 @@ export class Stage {
     shade.position.copy(bulbPos).add(new T.Vector3(0, .12, 0));
     const cord = new T.Mesh(new T.CylinderGeometry(.015, .015, 6, 6), new T.MeshBasicMaterial({ color: 0x111111 }));
     cord.position.copy(bulbPos).add(new T.Vector3(0, 3.3, 0));
-    const cone = new T.Mesh(new T.ConeGeometry(6.2, bulbPos.y, 64, 1, true), new T.ShaderMaterial({
+    const cone = this.cone = new T.Mesh(new T.ConeGeometry(6.2, bulbPos.y, 64, 1, true), new T.ShaderMaterial({
       transparent: true, depthWrite: false, blending: T.AdditiveBlending, side: T.FrontSide, // invisible from inside, like real light shafts
       uniforms: { tint: { value: new T.Color(0xffc98a) } },
       vertexShader: 'varying float h; varying vec3 n; varying vec3 vw; void main(){ h = uv.y; n = normalize(normalMatrix*normal); vec4 mv = modelViewMatrix*vec4(position,1.); vw = normalize(-mv.xyz); gl_Position = projectionMatrix*mv; }',
@@ -471,7 +489,35 @@ export class Stage {
     this.renderer.setPixelRatio(this.dprCap);
     this.renderer.setSize(this.size.w, this.size.h, false); this.camera.aspect = this.size.w / this.size.h; this.camera.updateProjectionMatrix();
   }
-  lampFlicker(on: boolean) { if (this.spot) this.spot.intensity = on ? 220 : 0; }
+  lampFlicker(on: boolean) { this.lampOn = on; if (this.spot) this.spot.intensity = on ? 220 : 0; }
+  /** Colour temperature of the lamp (the problem book cools the room as difficulty rises). */
+  setLamp(k: number) {
+    this.lampColor = k <= 2800 ? new T.Color(0xffc98a) : kelvin(k);
+    if (!this.spot) return;
+    this.spot.color.copy(this.lampColor);
+    this.cone.material.uniforms.tint.value.copy(this.lampColor);
+    (this.dust.material as T.PointsMaterial).color.copy(this.lampColor).lerp(new T.Color(0xffffff), .25);
+    this.shadowDirty = true;
+  }
+  /** Apply a quality preset. 'ultra' additionally needs the high-poly set (loaded at boot). */
+  setQuality(q: Quality) {
+    this.quality = q;
+    const dev = Math.min(devicePixelRatio || 1, 2);
+    const cfg = { auto: [dev, .5, 2048], ultra: [dev, .5, 2048], high: [dev, .5, 2048], mid: [Math.min(dev, 1.25), .25, 1024], low: [1, .25, 1024] }[q];
+    this.dprCap = cfg[0]; this.renderer.transmissionResolutionScale = cfg[1];
+    if (this.spot && this.spot.shadow.mapSize.x !== cfg[2]) { this.spot.shadow.mapSize.set(cfg[2], cfg[2]); this.spot.shadow.map?.dispose(); this.spot.shadow.map = null; }
+    this.perf.level = 0; this.perf.steps = []; this.perfWindow.length = 0; this.shadowDirty = true;
+    document.body.classList.toggle('q-low', q === 'low');
+    this.resize();
+  }
+  /** Capture the current view as a small JPEG data URL (codex plates, problem thumbnails). */
+  snapshot(w = 320, h = 180): string {
+    this.renderer.render(this.scene, this.camera);
+    const src = this.renderer.domElement, cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+    const sw = src.width, sh = src.height, k = Math.max(w / sw, h / sh), dw = w / k, dh = h / k;
+    cv.getContext('2d')!.drawImage(src, (sw - dw) / 2, (sh - dh) / 2, dw, dh, 0, 0, w, h);
+    try { return cv.toDataURL('image/jpeg', .72); } catch { return ''; }
+  }
 
   private loop(now: number) {
     requestAnimationFrame(t => this.loop(t));
@@ -488,7 +534,8 @@ export class Stage {
     const breathe = this.reduced ? 0 : Math.sin(now / 4200) * .004;
     const yaw = this.yaw + breathe + .62 * u, pitch = this.pitch - .45 * u, dist = this.dist * (1 + .1 * u);
     const seat = this.tmpA.set(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)).multiplyScalar(dist);
-    const aim = this.tmpB.set(0, -1.5 * u, this.aimZ * (1 - u) + .2 * u);
+    this.aimXNow += (this.aimX - this.aimXNow) * Math.min(1, dt / 220);
+    const aim = this.tmpB.set(this.aimXNow * (1 - u), -1.5 * u, this.aimZ * (1 - u) + .2 * u);
     if (this.camOverride) {
       this.camOverride.k = Math.min(1, this.camOverride.k + dt / 380);
       const k = ease(this.camOverride.k);
@@ -535,7 +582,7 @@ export class Stage {
     if (this.perfEl) this.perfEl.textContent = `${this.perf.fps.toFixed(0)} fps · ${this.perf.ms.toFixed(1)} ms/frame · render ${cpuMs.toFixed(1)} ms cpu · `
       + `${this.renderer.info.render.calls} calls · ${(this.renderer.info.render.triangles / 1000).toFixed(0)}k tris · dpr ${this.renderer.getPixelRatio()} · level ${this.perf.level}${this.perf.steps.length ? ' (' + this.perf.steps.join(', ') + ')' : ''}`;
     // ≥30 frames in the window: a genuinely slow machine (≥10 fps), not a throttled background tab
-    if (!moving || w.length < 30 || this.perf.ms < 33 || document.hidden) return;
+    if (this.quality !== 'auto' || !moving || w.length < 30 || this.perf.ms < 33 || document.hidden) return;
     const steps: [string, () => void][] = [
       ['dpr 1.5', () => { this.dprCap = Math.min(this.dprCap, 1.5); this.resize(); }],
       ['glass ¼', () => { this.renderer.transmissionResolutionScale = .25; }],
@@ -548,7 +595,11 @@ export class Stage {
     apply(); this.perf.steps.push(name); w.length = 0;
   }
   /** ?perf overlay. */
-  showPerf() { this.perfEl = document.createElement('div'); this.perfEl.className = 'perf'; document.body.append(this.perfEl); }
+  /** FPS line at the bottom of the screen (settings → FPS 표시). */
+  showPerf(on = true) {
+    if (on && !this.perfEl) { this.perfEl = document.createElement('div'); this.perfEl.className = 'perf'; document.body.append(this.perfEl); }
+    else if (!on && this.perfEl) { this.perfEl.remove(); this.perfEl = null; }
+  }
 }
 const LABEL_OFFSET = new T.Vector3(0, .05, -.62);
 const STALE = new T.MeshStandardMaterial({ color: 0xffa0ae, emissive: 0x401018, transparent: true, opacity: .34, depthWrite: false, roughness: .3 });

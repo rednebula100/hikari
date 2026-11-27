@@ -6,26 +6,29 @@
 <meta name="theme-color" content="#05060a">
 <meta name="description" content="衝 — 잡지 마라, 부딪쳐라. 체스의 움직임 그대로, 잡기 대신 운동량. 빛보다 빠른 것은 없다.">
 <title>衝</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%231c2621'/%3E%3Ctext x='32' y='47' text-anchor='middle' font-size='42' fill='%23f3efe2' font-family='serif'%3E衝%3C/text%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%230b0c0e'/%3E%3Crect x='3' y='3' width='58' height='58' fill='none' stroke='%23e0301e' stroke-width='3'/%3E%3Ctext x='32' y='46' text-anchor='middle' font-size='38' fill='%23ece6d6' font-family='serif'%3E衝%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Nanum+Pen+Script&family=Noto+Sans+KR:wght@400;500;700&family=Noto+Serif+KR:wght@300;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600&family=Nanum+Pen+Script&family=Noto+Serif+KR:wght@600;700&display=swap" rel="stylesheet">
 </head>
 <body>
 <div id="stage"></div>
 <div id="grain"></div>
 <div id="flash"></div>
 <div id="hud" hidden>
-  <div class="logo">衝</div>
-  <div id="status"></div>
+  <div class="logo" id="logo" title="衝"><div class="spin" id="logo-spin"></div></div>
+  <div id="status"><span class="lbl" id="status-l"></span><span id="status-t"></span></div>
   <div class="tools">
-    <button id="btn-pyr" class="tool" title="빛 피라미드 (Space) — 光 모드" hidden><svg viewBox="0 0 24 24"><path d="M12 20 3 5h18z M7.5 10.5h9 M10 15h4"/></svg></button>
-    <button id="btn-aim" class="tool on" title="조준 판서 켜기/끄기 (A)"><svg viewBox="0 0 24 24"><path d="M3 19 19 5 M14 5h5v5 M5 9c0-2 1-4 4-4"/></svg></button>
-    <button id="btn-menu" class="tool" title="메뉴 (Esc)"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+    <button id="btn-reset" class="tool" title="처음 배치로 (Backspace)" hidden><svg viewBox="0 0 24 24"><path d="M5 12a7 7 0 1 0 2-5M5 4v4h4"/></svg><span class="k">⌫</span></button>
+    <button id="btn-pyr" class="tool" title="빛 피라미드 (Space) — 光 모드" hidden><svg viewBox="0 0 24 24"><path d="M12 20 3 5h18z M7.5 10.5h9 M10 15h4"/></svg><span class="k">SP</span></button>
+    <button id="btn-aim" class="tool on" title="조준 판서 켜기/끄기 (A)"><svg viewBox="0 0 24 24"><path d="M3 19 19 5 M14 5h5v5 M5 9c0-2 1-4 4-4"/></svg><span class="k">A</span></button>
+    <button id="btn-menu" class="tool" title="메뉴 (Esc)"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg><span class="k">ESC</span></button>
   </div>
-  <div class="case me" id="case-me" title="떨어뜨린 적 기물"></div>
-  <div class="case them" id="case-them" title="잃은 기물"></div>
+  <div class="panel" id="pcard" hidden></div>
+  <div id="tape" hidden></div>
+  <div class="case me" id="case-me" data-l="떨어뜨린 기물"></div>
+  <div class="case them" id="case-them" data-l="잃은 기물"></div>
 </div>
-<div id="note" hidden></div>
+<div id="note" class="panel" hidden></div>
 <div id="toast" hidden></div>
 <div id="screen"></div>
 <script type="module" src="./src/ui/app.ts"></script>
