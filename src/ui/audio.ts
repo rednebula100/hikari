@@ -58,5 +58,7 @@ export class Sound {
   check() { this.tone(98, .22, 'sine', .14); this.tone(92, .22, 'sine', .12, { delay: .28 }); }
   win() { [523, 659, 784, 1046].forEach((f, i) => this.tone(f, 1.2, 'sine', .08, { delay: i * .1 })); }
   lose() { this.tone(60, 2.2, 'sine', .15, { glide: 40 }); }
+  /** The pyramid opens: a rising tone. */
+  unfold() { this.tone(220, .5, 'sine', .05, { glide: 520 }); }
   tick() { this.tone(1500, .03, 'sine', .03); }
 }

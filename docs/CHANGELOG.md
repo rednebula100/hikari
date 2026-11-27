@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.1 — 光 pyramid (2026-11-27)
+- 光 mode: Space / triangle button opens the light pyramid — the board dissolves into glass tiles that sink by
+  their light delay from the King; enemy afterimages hang at the depth their light left them, with stalks to the present.
+
 ## 0.4.0 — 衝 (2026-11-27)
 - Collision chess: captures replaced by exact 1D relativistic elastic collisions (c = 4 squares/turn,
   hyperbolic run-up), ring-outs, Newton's-cradle chains, knight stomp, physical check/mate.

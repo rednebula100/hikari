@@ -122,6 +122,7 @@ function newGame() {
   resetBoard(START);
   $('screen').innerHTML = ''; $('screen').className = ''; $('note').hidden = true; $('hud').hidden = false;
   stage.resetCamera(); stage.aimZ = -.7; stage.lampFlicker(true); sound.ambience(true);
+  pyramid = false; $('btn-pyr').hidden = variant !== 'light'; $('btn-pyr').classList.remove('on'); stage.setPyramid(false, 0, new Map());
   if (variant === 'light') refreshLight();
   setStatus(variant === 'light' ? '백의 차례 · 光 — 멀리 있는 것은 과거다' : variant === 'clash' ? '백의 차례' : '백의 차례 · 클래식');
 }
@@ -147,6 +148,7 @@ function onHover(sq: number) {
 }
 async function onSquare(sq: number, button: number) {
   sound.unlock();
+  if (pyramid) { togglePyramid(false); return; }
   if (busy || (screen !== 'play' && screen !== 'lesson') || pos.turn !== 'w') return;
   if (screen === 'lesson' && expPhase !== 'do') return;
   if (button === 2 || sq < 0) { selected = -1; drawSelection(); return; }
@@ -216,7 +218,21 @@ function refreshLight() {
   const seen = sightings(hist, outs, 'w');
   pos = belief(truth, seen, 'w');
   stage.sync(pos, false);
-  stage.showStale(new Map(seen.filter(x => x.alive && x.age > 0 && pos.board[x.sq]?.id === x.piece.id).map(x => [x.piece.id, x.age])));
+  const shown = seen.filter(x => x.alive && pos.board[x.sq]?.id === x.piece.id);
+  stage.showStale(new Map(shown.filter(x => x.age > 0).map(x => [x.piece.id, x.age])));
+  lightDepth = new Map(shown.map(x => [x.piece.id, hist.length - 1 - x.seenAt]));
+  stage.setPyramid(pyramid, kingSq(pos, 'w'), lightDepth);
+}
+let pyramid = false, lightDepth = new Map<string, number>(), pyramidTaught = false;
+function togglePyramid(force?: boolean) {
+  const can = variant === 'light' && screen === 'play';
+  pyramid = can && (force ?? !pyramid);
+  $('btn-pyr').classList.toggle('on', pyramid);
+  if (can) stage.setPyramid(pyramid, kingSq(pos, 'w'), lightDepth); else stage.setPyramid(false, 0, new Map());
+  if (pyramid) {
+    sound.unfold(); stage.chalk.clearNow(); selected = -1;
+    if (!pyramidTaught) { pyramidTaught = true; toast('위가 지금. 멀리 있는 칸일수록 깊은 과거 — 빛이 거기서 오는 데 걸린 시간', 4200); }
+  }
 }
 async function lightStep(intent: Move, side: Side) {
   const before = truth, res = resolve(before, intent), r = apply(before, res);
@@ -233,6 +249,7 @@ async function lightStep(intent: Move, side: Side) {
   refreshLight();
 }
 async function lightTurn(m: Move) {
+  togglePyramid(false);
   await lightStep(m, 'w');
   if (await lightOver()) return;
   setStatus('흑이 움직인다 — 보이지 않는다');
@@ -315,6 +332,7 @@ async function finale() {
 
 // ── tutorial: 실험 노트 (predict → observe → explain) ─────────────────────
 function experiment(i: number) {
+  pyramid = false; $('btn-pyr').hidden = true; stage.setPyramid(false, 0, new Map());
   if (variantBeforeLesson === undefined) variantBeforeLesson = variant;
   variant = 'clash'; mode = 'clash';
   screen = 'lesson'; exp = i; guess = -1;
@@ -375,13 +393,15 @@ function menu() {
   document.querySelectorAll<HTMLButtonElement>('[data-l]').forEach(b => b.onclick = () => { level = Number(b.dataset.l) as Level; store.set('level', String(level)); newGame(); });
 }
 $('btn-menu').onclick = menu;
+$('btn-pyr').onclick = () => togglePyramid();
 $('btn-aim').onclick = () => { aimOn = !aimOn; store.set('aim', aimOn ? '1' : '0'); $('btn-aim').classList.toggle('on', aimOn); drawSelection(); };
 $('btn-aim').classList.toggle('on', aimOn);
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if ($('screen').innerHTML && screen !== 'title' && screen !== 'over') { $('screen').innerHTML = ''; $('screen').className = ''; }
     else if (selected >= 0) { selected = -1; drawSelection(); } else menu();
-  } else if (e.key.toLowerCase() === 'a') $('btn-aim').click();
+  } else if (e.key === ' ') { e.preventDefault(); togglePyramid(); }
+  else if (e.key.toLowerCase() === 'a') $('btn-aim').click();
   else if (e.key.toLowerCase() === 'r') stage.resetCamera();
 });
 stage.onSquare = (s, b) => { void onSquare(s, b); };

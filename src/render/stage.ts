@@ -3,7 +3,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { loadSet, type ChessSet } from './assets';
 import { Chalk } from './chalk';
 import { C, gamma } from '../engine/collide';
-import { MASS, file, rank, type Outcome, type Pos, type Piece, type Kind, type Side } from '../engine/rules';
+import { MASS, cheb, file, rank, type Outcome, type Pos, type Piece, type Kind, type Side } from '../engine/rules';
 import type { Sound } from '../ui/audio';
 
 export const X = (s: number) => -(file(s) - 3.5);
@@ -29,6 +29,8 @@ export class Stage {
   private spot!: T.SpotLight;
   private dust!: T.Points;
   private board!: T.Object3D;
+  /** The table and its brass rulers: they step aside when the pyramid opens below the board. */
+  private floor = new T.Group();
   private boardChalk!: { canvas: HTMLCanvasElement; tex: T.CanvasTexture; lines: string[] };
   private last = performance.now();
   private size = { w: 1, h: 1 };
@@ -69,6 +71,7 @@ export class Stage {
     this.chalk = new Chalk(box.max.y - .002); // above the raised frame so margin notes stay visible
     this.scene.add(this.chalk.mesh, this.ghosts, this.flashLight);
     this.hoverMesh.rotation.x = -Math.PI / 2; this.hoverMesh.visible = false; this.scene.add(this.hoverMesh);
+    this.buildTiles();
   }
 
   // ── the night physics lab ──────────────────────────────────────────────
@@ -106,12 +109,12 @@ export class Stage {
     const wt = new T.CanvasTexture(wood); wt.wrapS = wt.wrapT = T.RepeatWrapping; wt.repeat.set(3, 3); wt.colorSpace = T.SRGBColorSpace;
     const table = new T.Mesh(new T.PlaneGeometry(60, 60), new T.MeshStandardMaterial({ map: wt, roughness: .55, metalness: .05 }));
     table.rotation.x = -Math.PI / 2; table.position.y = box.min.y - .002; table.receiveShadow = true;
-    this.scene.add(table);
+    this.floor.add(table); this.scene.add(this.floor);
     // brass rulers along the cliff edges
     const brass = new T.MeshStandardMaterial({ color: 0xb08a4a, metalness: .95, roughness: .28 });
     const half = (box.max.x - box.min.x) / 2 + .18, rl = half * 2 + .3;
     for (const [x, z, ry] of [[0, -half, 0], [0, half, 0], [-half, 0, Math.PI / 2], [half, 0, Math.PI / 2]] as const) {
-      const bar = new T.Mesh(new T.BoxGeometry(rl, .05, .22), brass); bar.position.set(x, box.min.y + .025, z); bar.rotation.y = ry; bar.castShadow = bar.receiveShadow = true; this.scene.add(bar);
+      const bar = new T.Mesh(new T.BoxGeometry(rl, .05, .22), brass); bar.position.set(x, box.min.y + .025, z); bar.rotation.y = ry; bar.castShadow = bar.receiveShadow = true; this.floor.add(bar);
     }
     // blackboard far behind Black: the match is written up as it happens
     const cv = document.createElement('canvas'); cv.width = 2048; cv.height = 1024;
@@ -156,6 +159,65 @@ export class Stage {
     for (const [id, m] of this.pieces) if (!live.has(id)) { this.scene.remove(m); this.pieces.delete(id); }
   }
   pieceObject(id: string) { return this.pieces.get(id); }
+
+  // ── 光: the light pyramid ─────────────────────────────────────────────
+  // The board dissolves into 64 glass tiles that sink by their light delay from
+  // the King (a square d away is seen d-1 plies late). Enemy afterimages hang at the
+  // depth of the instant their light left them.
+  private pyr = { on: false, eye: 4, depth: new Map<string, number>(), u: 0, was: false };
+  private tiles?: T.InstancedMesh;
+  private pyrLines = new T.LineSegments(new T.BufferGeometry(), new T.LineBasicMaterial({ vertexColors: true, transparent: true, blending: T.AdditiveBlending, depthWrite: false, toneMapped: false }));
+  setPyramid(on: boolean, eye: number, depth: Map<string, number>) { this.pyr.on = on; this.pyr.eye = eye; this.pyr.depth = depth; }
+  get pyramidOpen() { return this.pyr.u > .02; }
+  private buildTiles() {
+    const geo = new T.BoxGeometry(.97, .06, .97); geo.translate(0, -.03, 0);
+    this.tiles = new T.InstancedMesh(geo, new T.MeshPhysicalMaterial({ color: 0xffffff, roughness: .22, metalness: .05, clearcoat: 1, transparent: true, opacity: .9 }), 64);
+    const light = new T.Color(0xd8cbb5), dark = new T.Color(0x23302b);
+    for (let s2 = 0; s2 < 64; s2++) this.tiles.setColorAt(s2, (file(s2) + rank(s2)) % 2 ? light : dark);
+    this.tiles.visible = false; this.tiles.receiveShadow = true; this.tiles.castShadow = true;
+    this.pyrLines.frustumCulled = false; this.pyrLines.renderOrder = 6;
+    this.scene.add(this.tiles, this.pyrLines);
+  }
+  private updatePyramid(u: number) {
+    const H = .5, top = this.surface, eye = this.pyr.eye;
+    this.board.visible = u < .25;
+    this.floor.visible = u < .2;
+    this.chalk.mesh.visible = u < .05;
+    if (u > .05) this.hoverMesh.visible = false;
+    const t = this.tiles!; t.visible = u > .003;
+    (t.material as T.MeshPhysicalMaterial).opacity = Math.min(.9, u * 3);
+    const o = new T.Object3D();
+    for (let s2 = 0; s2 < 64; s2++) { o.position.set(X(s2), top - u * H * Math.max(0, cheb(s2, eye) - 1), Z(s2)); o.updateMatrix(); t.setMatrixAt(s2, o.matrix); }
+    t.instanceMatrix.needsUpdate = true;
+    // afterimages sink to the moment their light left them
+    for (const [id, d] of this.pyr.depth) { const m = this.pieces.get(id); if (m) m.position.y = top - u * H * Math.min(d, 14); }
+    // stepped light-cone edges + stalks from the present down to each afterimage
+    const pos: number[] = [], col: number[] = [];
+    const seg = (a: number[], b: number[], c: [number, number, number], k: number) => { pos.push(...a, ...b); col.push(c[0] * k, c[1] * k, c[2] * k, c[0] * k, c[1] * k, c[2] * k); };
+    const cyan: [number, number, number] = [.62, .89, 1], rose: [number, number, number] = [1, .55, .62], gold: [number, number, number] = [1, .83, .55];
+    const ex = X(eye), ez = Z(eye), clip = (v: number) => Math.max(-4, Math.min(4, v));
+    for (let d = 1; d <= 8; d++) {
+      const y = top + .01 - u * H * (d - 1), yn = top + .01 - u * H * d, h = d + .5;
+      const X0 = ex - h, X1 = ex + h, Z0 = ez - h, Z1 = ez + h, x0 = clip(X0), x1 = clip(X1), z0 = clip(Z0), z1 = clip(Z1);
+      if (x0 >= x1 || z0 >= z1) continue;
+      const k = .75 * u * (1 - d / 11);
+      const side = (a: number[], b: number[]) => { seg(a, b, cyan, k); seg([a[0], yn, a[2]], [b[0], yn, b[2]], cyan, k * .45); };
+      if (Z0 > -4) side([x0, y, Z0], [x1, y, Z0]);
+      if (Z1 < 4) side([x0, y, Z1], [x1, y, Z1]);
+      if (X0 > -4) side([X0, y, z0], [X0, y, z1]);
+      if (X1 < 4) side([X1, y, z0], [X1, y, z1]);
+      for (const [cx, cz] of [[X0, Z0], [X1, Z0], [X1, Z1], [X0, Z1]]) if (Math.abs(cx) < 4 && Math.abs(cz) < 4) seg([cx, y, cz], [cx, yn, cz], cyan, k * .8);
+    }
+    const P = [[-4, top + .02, -4], [4, top + .02, -4], [4, top + .02, 4], [-4, top + .02, 4]];
+    P.forEach((a, i) => seg(a, P[(i + 1) % 4], gold, .6 * u)); // the present
+    for (const [id] of this.pyr.depth) {
+      const m = this.pieces.get(id); if (!m) continue;
+      for (let y = top; y > m.position.y + .05; y -= .3) seg([m.position.x, y, m.position.z], [m.position.x, Math.max(m.position.y, y - .16), m.position.z], rose, .7 * u);
+    }
+    const g = new T.BufferGeometry();
+    g.setAttribute('position', new T.Float32BufferAttribute(pos, 3)); g.setAttribute('color', new T.Float32BufferAttribute(col, 3));
+    this.pyrLines.geometry.dispose(); this.pyrLines.geometry = g; this.pyrLines.visible = u > .003;
+  }
   private stale = new Map<string, { age: number; label: HTMLElement }>();
   /** 光 mode: enemy pieces shown where their light left them — translucent, with an age in moves. */
   showStale(ages: Map<string, number>) {
@@ -374,6 +436,7 @@ export class Stage {
   }
   resetCamera() { this.yaw = 0; this.pitch = .9; this.dist = 21.5; }
   pick(cx: number, cy: number) {
+    if (this.pyr.u > .02) return -1;
     const r = this.renderer.domElement.getBoundingClientRect();
     const ray = new T.Raycaster(); ray.setFromCamera(new T.Vector2((cx - r.left) / r.width * 2 - 1, -(cy - r.top) / r.height * 2 + 1), this.camera);
     const p = ray.ray.intersectPlane(new T.Plane(new T.Vector3(0, 1, 0), -this.surface), new T.Vector3());
@@ -397,16 +460,23 @@ export class Stage {
     const dt = Math.min(60, now - this.last); this.last = now;
     this.anims = this.anims.filter(a => a.update(now));
     // camera: player seat with slow breathing, or the collision rail
+    const goal = this.pyr.on ? 1 : 0;
+    this.pyr.u = this.reduced ? goal : T.MathUtils.damp(this.pyr.u, goal, 5, dt / 1000);
+    if (Math.abs(this.pyr.u - goal) < .002) this.pyr.u = goal;
+    const u = this.pyr.u;
+    if (this.tiles && (u > 0 || this.pyr.was)) { this.updatePyramid(u); this.pyr.was = u > 0; }
     const breathe = this.reduced ? 0 : Math.sin(now / 4200) * .004;
-    const seat = new T.Vector3(Math.sin(this.yaw + breathe) * Math.cos(this.pitch), Math.sin(this.pitch), -Math.cos(this.yaw + breathe) * Math.cos(this.pitch)).multiplyScalar(this.dist);
+    const yaw = this.yaw + breathe + .62 * u, pitch = this.pitch - .45 * u, dist = this.dist * (1 + .1 * u);
+    const seat = new T.Vector3(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)).multiplyScalar(dist);
+    const aim = new T.Vector3(0, -1.5 * u, this.aimZ * (1 - u) + .2 * u);
     if (this.camOverride) {
       this.camOverride.k = Math.min(1, this.camOverride.k + dt / 380);
       const k = ease(this.camOverride.k);
       this.camera.position.lerpVectors(seat, this.camOverride.pos, k);
-      this.look.lerpVectors(new T.Vector3(0, 0, this.aimZ), this.camOverride.look, k);
+      this.look.lerpVectors(aim, this.camOverride.look, k);
     } else {
       this.camera.position.lerp(seat, this.reduced ? 1 : .12);
-      this.look.lerp(new T.Vector3(0, 0, this.aimZ), .08);
+      this.look.lerp(aim, this.reduced ? 1 : .08);
     }
     this.camera.lookAt(this.look);
     // dust drifts in the lamp light; heat glows and fades
@@ -418,6 +488,7 @@ export class Stage {
       const m = this.pieces.get(id); if (!m) continue;
       const v = m.position.clone().add(new T.Vector3(0, .05, -.62)).project(this.camera); // at the front edge of the base
       st.label.style.transform = `translate(${(v.x + 1) / 2 * this.size.w}px,${(1 - v.y) / 2 * this.size.h}px)`;
+      st.label.style.opacity = String(Math.max(0, 1 - this.pyr.u * 3)); // depth says it in the pyramid
     }
     this.renderer.render(this.scene, this.camera);
   }
