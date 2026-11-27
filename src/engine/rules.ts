@@ -1,7 +1,7 @@
 // FIDE chess rules with a pluggable capture model.
 //   'classic' — orthodox chess (verified against chess.js by perft/oracle tests)
 //   'clash'   — 衝: captures become relativistic 1D collisions; knights stomp; off-board = removed.
-import { simulateLine, type LineResult } from './collide.ts'
+import { runSpeed, simulateLine, type LineResult } from './collide.ts'
 
 export type Side = 'w' | 'b'
 export type Kind = 'p' | 'n' | 'b' | 'r' | 'q' | 'k'
@@ -22,6 +22,7 @@ export interface Clash {
   line: number[] // board squares along the collision axis, in axis order
   attacker: string
   speed: number
+  run: number
   sim: LineResult
   /** piece id → [from square, final square or null if it left the board] */
   moved: Map<string, [number, number | null]>
@@ -205,7 +206,7 @@ export function make(p0: Pos, m: Move, mode: Mode): { pos: Pos; out: Outcome } {
     const df = Math.sign(file(m.to) - file(m.from)), dr = Math.sign(rank(m.to) - rank(m.from))
     const line = lineThrough(m.to, df, dr)
     const idx = (s: number) => line.indexOf(s)
-    const speed = cheb(m.from, m.to)
+    const run = cheb(m.from, m.to), speed = runSpeed(run)
     b[m.from] = null
     const bodies = line.filter(s => b[s]).map(s => ({ id: b[s]!.id, mass: MASS[b[s]!.kind], s: idx(s), v: 0 }))
     bodies.push({ id: mover.id, mass: MASS[mover.kind], s: idx(m.to) - 1, v: speed })
@@ -221,7 +222,7 @@ export function make(p0: Pos, m: Move, mode: Mode): { pos: Pos; out: Outcome } {
       if (dest === null) { out.removed.push(piece); revoke(p, from, piece); reset = true }
       else { b[dest] = piece; if (dest !== from) revoke(p, from, piece) }
     }
-    out.clash = { line, attacker: mover.id, speed, sim, moved }
+    out.clash = { line, attacker: mover.id, speed, run, sim, moved }
   } else {
     b[m.to] = mover; b[m.from] = null
     if (m.flag === 'd') p.ep = (m.from + m.to) / 2

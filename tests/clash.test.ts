@@ -13,7 +13,7 @@ test('collide: classical limit, conservation, and the speed of light', () => {
   const [a, b] = collide(5, 0.001, 1, 0)
   const [na, nb] = collide(5, 0.001, 1, 0, C, true)
   near(a, na, 1e-9); near(b, nb, 1e-9)
-  for (const [m1, m2, v] of [[9, 1, 7], [1, 9, 7], [3, 3, 5], [10, 5, 6.5]]) {
+  for (const [m1, m2, v] of [[9, 1, 3.5], [1, 9, 3.5], [3, 3, 2.5], [10, 5, 3.9]]) {
     const [u1, u2] = collide(m1, v, m2, 0)
     near(momentum(m1, v) , momentum(m1, u1) + momentum(m2, u2), 1e-9)
     near(energy(m1, v) + energy(m2, 0), energy(m1, u1) + energy(m2, u2), 1e-6)
@@ -28,20 +28,19 @@ test('line simulation: Newton cradle passes momentum to the far end; totals cons
   assert.deepEqual([...r.final.entries()], [['a', 0], ['b', 1], ['c', 2], ['d', 5]])
   near(r.p0, r.p1, 1e-9); near(r.e0, r.e1, 1e-6)
   // a body leaving the board keeps its momentum in the books
-  const out = simulateLine([{ id: 'q', mass: 9, s: 2, v: 4 }, { id: 'p', mass: 1, s: 3, v: 0 }], 8)
+  const out = simulateLine([{ id: 'q', mass: 9, s: 4, v: 3.5 }, { id: 'p', mass: 1, s: 5, v: 0 }], 8)
   assert.equal(out.final.get('p'), null)
   near(out.p0, out.p1, 1e-9)
 })
 
-test('衝: rook rams a pawn off the board and follows through (and can overshoot)', () => {
-  const p = fromFen('4k3/8/8/p7/8/8/8/R3K3 w - - 0 1')
-  const { pos, out } = make(p, find(p, 'a1', 'a5'), 'clash')
+test('衝: rook rams a pawn off the board and follows through; a queen at full run overshoots', () => {
+  const p = fromFen('4k3/8/p7/8/8/8/8/R3K3 w - - 0 1')
+  const { pos, out } = make(p, find(p, 'a1', 'a6'), 'clash')
   assert.deepEqual(out.removed.map(x => x.kind), ['p'])
   const rook = pos.board.findIndex(x => x?.kind === 'r')
-  assert.ok(rook > parse('a4'), 'rook followed through to ' + name(rook))
-  // from farther away the rook flies off the edge after the pawn
-  const q = fromFen('4k3/8/p7/8/8/8/8/R3K3 w - - 0 1')
-  assert.deepEqual(make(q, find(q, 'a1', 'a6'), 'clash').out.removed.map(x => x.kind).sort(), ['p', 'r'])
+  assert.ok(rook > parse('a5'), 'rook followed through to ' + name(rook))
+  const q = fromFen('p3k3/8/8/8/8/8/8/Q3K3 w - - 0 1')
+  assert.deepEqual(make(q, find(q, 'a1', 'a8'), 'clash').out.removed.map(x => x.kind).sort(), ['p', 'q'])
 })
 
 test('衝: light piece bounces off a heavy one', () => {

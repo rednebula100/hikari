@@ -1,7 +1,14 @@
 // One-dimensional relativistic elastic collisions on a line of squares,
 // simulated exactly (event-driven) for one turn. c is in squares per turn.
 
-export const C = 8
+/** Speed of light: 4 squares per turn (light crosses half the board in one move). */
+export const C = 4
+/** Proper acceleration of a run-up (squares/turn²). */
+export const ACCEL = 1.46
+/** Hyperbolic motion from rest over L squares: γ = 1 + aL/c². Speed saturates below c; momentum keeps growing. */
+export function runSpeed(L: number, c = C, a = ACCEL) { const g = 1 + a * L / (c * c); return c * Math.sqrt(1 - 1 / (g * g)) }
+/** The classical run-up for comparison: v² = 2aL. */
+export const runSpeedNewton = (L: number, a = ACCEL) => Math.sqrt(2 * a * L)
 
 export interface Body { id: string; mass: number; s: number; v: number }
 export interface Track { id: string; keys: { t: number; s: number; v: number }[]; exit?: { t: number; side: -1 | 1; v: number } }
