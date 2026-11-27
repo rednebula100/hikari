@@ -4,7 +4,7 @@ import { C, gamma } from '../engine/collide.ts'
 
 export type Rarity = 1 | 2 | 3 | 4 // 일반 · 드묾 · 희귀 · 전설
 export interface Entry { id: string; no: number; group: number; name: string; hint: string; formula: string; text: string; rarity: Rarity }
-export const GROUPS = ['Ⅰ 탄성', 'Ⅱ 비탄성', 'Ⅲ 상대론', 'Ⅳ 체스', 'Ⅴ 光', 'Ⅵ 문제집']
+export const GROUPS = ['Ⅰ 탄성', 'Ⅱ 비탄성·충격파', 'Ⅲ 상대론', 'Ⅳ 체스', 'Ⅴ 光', 'Ⅵ 문제집·놀이']
 export const RARITY = ['', '일반', '드묾', '희귀', '전설']
 
 const E = (group: number, id: string, name: string, rarity: Rarity, hint: string, formula: string, text: string) => ({ group, id, name, rarity, hint, formula, text })
@@ -32,7 +32,11 @@ const RAW = [
   E(1, 'stomp', '낙하 공격', 1, '나이트로 상대 기물 위에 내려앉는다', 'K → Q (열)', '나이트는 뛰어올라 내려찍는다. 완전 비탄성: 운동 에너지가 열이 된다.'),
   E(1, 'heat', '열 축적', 2, '한 판에 낙하 공격 세 번', 'ΣQ = 3', '판이 달아오른다.'),
   E(1, 'overheat', '과열', 3, '같은 나이트로 세 번', 'Q₁ + Q₂ + Q₃', '한 나이트가 세 번 내려찍었다.'),
-  E(1, 'knightmate', '나이트 메이트', 3, '낙하 공격으로 체크메이트', '비탄성 + 메이트', '충돌이 아닌 열로 끝낸 경기.'),
+  E(1, 'shock', '충격파', 1, '나이트가 적 기물 바로 옆에 내려앉는다', 'Δx = 1 (질량 ≤ 5)', '착지의 충격이 상하좌우의 적을 한 칸씩 밀어낸다. 퀸과 킹은 버틴다.'),
+  E(1, 'shockout', '충격파 낙하', 2, '충격파로 적을 판 밖으로', '가장자리 + 충격파', '나이트는 직접 닿지 않고도 기물을 떨어뜨릴 수 있다 — 위치의 무기.'),
+  E(1, 'knightmate', '충격파 메이트', 3, '나이트의 수로 체크메이트', '충격파 → 메이트', '나이트는 킹을 짓밟을 수 없다. 대신 수비수를 흩어 메이트를 열었다.'),
+  E(0, 'cushion', '쿠션 샷', 2, '비숍이 가장자리에서 튕겨 부딪친다', '입사각 = 반사각', '당구의 쿠션. 꺾인 길도 도움닫기에 들어간다.'),
+  E(0, 'phalanx', '팔랑크스', 2, '나란히 선 폰에 부딪친다', 'm = 1 + 이웃 폰', '옆에 붙은 아군 폰이 맞은 폰을 받쳐 더 무겁게 만든다.'),
   E(2, 'runup', '도움닫기', 1, '네 칸 이상 달려와 부딪친다', 'γ = 1 + aL/c²', '먼 거리에서 출발할수록 빨라진다. 단, 빛보다 빠를 수는 없다.'),
   E(2, 'g125', 'γ 1.25', 2, '로런츠 인자 1.25 이상', 'γ = 1/√(1 − v²/c²) ≥ 1.25', '속도의 60%가 빛의 속도에 닿았다. 질량이 무거워진 것처럼 행동한다.'),
   E(2, 'g150', 'γ 1.5', 3, '로런츠 인자 1.5 이상 (6칸 이상 질주)', 'γ ≥ 1.5 ⇔ v ≥ 0.75c', '속도는 거의 늘지 않는데 운동량은 계속 늘어난다.'),
@@ -57,6 +61,7 @@ const RAW = [
   E(5, 'solve1', '첫 해답', 1, '당구 문제 하나를 푼다', '解', '문제집의 첫 장.'),
   E(5, 'solve5', '盲 돌파', 3, '★5 문제를 푼다', '판서 없이', '조준 판서 없이 결과를 계산했다.'),
   E(5, 'solve10', '울프-레이에', 4, '★10 문제를 푼다', '一', '가장 뜨거운 별.'),
+  E(5, 'flick', '알까기', 3, '타이틀 화면의 기물을 손으로 튕겨 본다', 'J = Δp', '규칙 밖의 실험. 손가락의 충격량이 그대로 운동량이 된다.'),
 ] as const
 export const ENTRIES: Entry[] = RAW.map((e, i) => ({ ...e, no: i + 1 }))
 export const byId = new Map(ENTRIES.map(e => [e.id, e]))
@@ -73,6 +78,7 @@ export function detect(before: Pos, out: Outcome, mover: Side, g: GameTally): st
   if (out.move.flag === 'e') hit.push('enpassant')
   if (out.promoted) hit.push('promotion')
   if (out.removed.some(x => x.kind === 'q')) hit.push('queenfall')
+  if (out.shock?.length) { hit.push('shock'); if (out.shock.some(x => x.to === null)) hit.push('shockout') }
   if (out.stomp) {
     hit.push('stomp'); g.stomps++
     const id = attackerPiece?.id ?? '?'; g.byKnight.set(id, (g.byKnight.get(id) ?? 0) + 1)
@@ -82,6 +88,8 @@ export function detect(before: Pos, out: Outcome, mover: Side, g: GameTally): st
   const c = out.clash
   if (!c || !attackerPiece) return hit
   hit.push('first')
+  if (out.move.via !== undefined) hit.push('cushion')
+  if (c.phalanx?.length) hit.push('phalanx')
   const sim = c.sim, att = sim.tracks.find(t => t.id === c.attacker)!
   const lastV = att.exit ? att.exit.v : att.keys[att.keys.length - 1].v
   const mass = new Map<string, number>()

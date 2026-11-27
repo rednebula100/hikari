@@ -270,9 +270,9 @@ function orbit(top: number): Built {
     fragmentShader: `uniform vec3 sun; varying vec3 n; varying vec3 wp; void main(){ vec3 v = normalize(cameraPosition - wp); float r = pow(max(0., 1. - abs(dot(-n, v))*1.6), 3.); float l = .25 + max(dot(-n, sun), 0.); gl_FragColor = vec4(vec3(.3,.6,1.)*r*l, 1.);${OUT}}`,
   }));
   atmo.position.copy(planet.position);
-  const plate = new T.Mesh(new T.CylinderGeometry(7.6, 7.2, .7, 6), new T.MeshStandardMaterial({ color: 0x1a1d22, metalness: .85, roughness: .32 }));
+  const plate = new T.Mesh(new T.CylinderGeometry(9.4, 9.0, .7, 6), new T.MeshStandardMaterial({ color: 0x1a1d22, metalness: .85, roughness: .32 }));
   plate.position.y = top - .35; plate.rotation.y = Math.PI / 6;
-  const glow = new T.Mesh(new T.CylinderGeometry(7.65, 7.65, .06, 6, 1, true), new T.MeshBasicMaterial({ color: 0x6fb2ff, toneMapped: false, side: T.DoubleSide }));
+  const glow = new T.Mesh(new T.CylinderGeometry(9.45, 9.45, .06, 6, 1, true), new T.MeshBasicMaterial({ color: 0x6fb2ff, toneMapped: false, side: T.DoubleSide }));
   glow.position.y = top - .05; glow.rotation.y = Math.PI / 6;
   const ground = new T.Group(); ground.add(shadowed(plate), glow);
   g.add(sky, planet, atmo, ground);

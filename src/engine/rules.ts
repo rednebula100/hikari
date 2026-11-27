@@ -17,13 +17,16 @@ export interface Pos {
   full: number
 }
 export type Flag = 'n' | 'c' | 'e' | 'k' | 'q' | 'd'
-export interface Move { from: number; to: number; kind: Kind; flag: Flag; promo?: Kind }
+/** `via`: the edge square where a bishop's cushion shot reflects (衝 only). */
+export interface Move { from: number; to: number; kind: Kind; flag: Flag; promo?: Kind; via?: number }
 export interface Clash {
   line: number[] // board squares along the collision axis, in axis order
   attacker: string
   speed: number
   run: number
   sim: LineResult
+  /** pawns that stood firmer thanks to a neighbour beside them (phalanx) */
+  phalanx: string[]
   /** piece id → [from square, final square or null if it left the board] */
   moved: Map<string, [number, number | null]>
 }
@@ -31,11 +34,20 @@ export interface Outcome {
   move: Move
   removed: Piece[]
   stomp?: { square: number; victim: Piece }
+  /** a knight's landing shockwave: who was pushed where (null = off the board) */
+  shock?: { id: string; from: number; to: number | null }[]
   clash?: Clash
   promoted?: Kind
 }
 
 export const MASS: Record<Kind, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 10 }
+/** 衝 abilities: the heaviest piece a knight can crush, and the heaviest its landing shock can shift. */
+export const STOMP_MAX = 3, SHOCK_MAX = 5
+/** Direction of travel at the target (after a cushion reflection if any). */
+export function moveDir(m: Move): [number, number] {
+  const a = m.via ?? m.from
+  return [Math.sign(file(m.to) - file(a)), Math.sign(rank(m.to) - rank(a))]
+}
 export const other = (s: Side): Side => (s === 'w' ? 'b' : 'w')
 export const file = (sq: number) => sq & 7
 export const rank = (sq: number) => sq >> 3
@@ -112,7 +124,8 @@ export function attacked(p: Pos, target: number, by: Side): boolean {
 }
 
 // ── pseudo-legal moves (orthodox patterns) ───────────────────────────────
-export function pseudo(p: Pos): Move[] {
+export function pseudo(p: Pos, mode: Mode = 'classic'): Move[] {
+  const clash = mode === 'clash'
   const out: Move[] = [], b = p.board, me = p.turn
   for (let s = 0; s < 64; s++) {
     const x = b[s]; if (!x || x.side !== me) continue
@@ -137,7 +150,7 @@ export function pseudo(p: Pos): Move[] {
       for (const [a, c] of x.kind === 'n' ? N_STEPS : K_STEPS) {
         if (!on(f + a, r + c)) continue
         const t = sq(f + a, r + c), y = b[t]
-        if (!y) add(t, 'n'); else if (y.side !== me) add(t, 'c')
+        if (!y) add(t, 'n'); else if (y.side !== me && !(clash && x.kind === 'n' && MASS[y.kind] > STOMP_MAX)) add(t, 'c')
       }
       if (x.kind === 'k') {
         const home = me === 'w' ? 4 : 60, opp = other(me)
@@ -152,11 +165,27 @@ export function pseudo(p: Pos): Move[] {
       }
     } else {
       const dirs = x.kind === 'r' ? R_DIRS : x.kind === 'b' ? B_DIRS : K_STEPS
+      const direct = new Set<number>(), edges: [number, number, number][] = []
       for (const [a, c] of dirs) {
+        let last = -1, open = true
         for (let u = f + a, w = r + c; on(u, w); u += a, w += c) {
           const t = sq(u, w), y = b[t]
-          if (!y) { add(t, 'n'); continue }
-          if (y.side !== me) add(t, 'c')
+          if (!y) { add(t, 'n'); direct.add(t); last = t; continue }
+          if (y.side !== me) { add(t, 'c'); direct.add(t) }
+          open = false; break
+        }
+        if (clash && x.kind === 'b' && open && last >= 0) edges.push([last, a, c])
+      }
+      // 衝 cushion: a bishop that reaches the rim along an open diagonal may reflect once (never in a corner)
+      for (const [via, a0, c0] of edges) {
+        const fu = file(via) + a0, rw = rank(via) + c0, offF = fu < 0 || fu > 7, offR = rw < 0 || rw > 7
+        if (offF && offR) continue
+        const a = offF ? -a0 : a0, c = offR ? -c0 : c0
+        for (let u = file(via) + a, w = rank(via) + c; on(u, w); u += a, w += c) {
+          const t = sq(u, w), y = b[t]
+          if (t === s) break
+          if (!y) { if (!direct.has(t)) out.push({ from: s, to: t, kind: 'b', flag: 'n', via }); continue }
+          if (y.side !== me && !direct.has(t)) out.push({ from: s, to: t, kind: 'b', flag: 'c', via })
           break
         }
       }
@@ -203,12 +232,21 @@ export function make(p0: Pos, m: Move, mode: Mode, opts: { newton?: boolean } = 
     reset = true
   } else if (m.flag === 'c') {
     // 衝: relativistic collision along the move's line
-    const df = Math.sign(file(m.to) - file(m.from)), dr = Math.sign(rank(m.to) - rank(m.from))
+    const [df, dr] = moveDir(m)
     const line = lineThrough(m.to, df, dr)
     const idx = (s: number) => line.indexOf(s)
-    const run = cheb(m.from, m.to), speed = opts.newton ? runSpeedNewton(run) : runSpeed(run)
+    const run = m.via !== undefined ? cheb(m.from, m.via) + cheb(m.via, m.to) : cheb(m.from, m.to), speed = opts.newton ? runSpeedNewton(run) : runSpeed(run)
     b[m.from] = null
-    const bodies = line.filter(s => b[s]).map(s => ({ id: b[s]!.id, mass: MASS[b[s]!.kind], s: idx(s), v: 0 }))
+    // phalanx: a struck pawn with own pawns right beside it (across the line) is that much heavier (max +2)
+    const phalanx: string[] = []
+    const massOf = (s: number) => {
+      const x = b[s]!; if (x.kind !== 'p') return MASS[x.kind]
+      let n = 0
+      for (const [u, w] of [[-dr, df], [dr, -df]]) { const f2 = file(s) + u, r2 = rank(s) + w; if (on(f2, r2)) { const y = b[sq(f2, r2)]; if (y && y.kind === 'p' && y.side === x.side) n++ } }
+      if (n) phalanx.push(x.id)
+      return 1 + Math.min(2, n)
+    }
+    const bodies = line.filter(s => b[s]).map(s => ({ id: b[s]!.id, mass: massOf(s), s: idx(s), v: 0 }))
     bodies.push({ id: mover.id, mass: MASS[mover.kind], s: idx(m.to) - 1, v: speed })
     const sim = simulateLine(bodies, line.length, 1, { newton: opts.newton })
     const pieces = new Map<string, Piece>([[mover.id, mover]])
@@ -222,12 +260,28 @@ export function make(p0: Pos, m: Move, mode: Mode, opts: { newton?: boolean } = 
       if (dest === null) { out.removed.push(piece); revoke(p, from, piece); reset = true }
       else { b[dest] = piece; if (dest !== from) revoke(p, from, piece) }
     }
-    out.clash = { line, attacker: mover.id, speed, run, sim, moved }
+    out.clash = { line, attacker: mover.id, speed, run, sim, moved, phalanx }
   } else {
     b[m.to] = mover; b[m.from] = null
     if (m.flag === 'd') p.ep = (m.from + m.to) / 2
   }
   if (m.promo && mover.kind === 'p' && b[m.to] === mover) { b[m.to] = { ...mover, kind: m.promo }; out.promoted = m.promo }
+  // 衝 knight: wherever it lands, a shockwave shoves adjacent enemy pieces (mass ≤ SHOCK_MAX) one square away
+  if (mode === 'clash' && mover.kind === 'n' && b[m.to] === mover) {
+    const shock: { id: string; from: number; to: number | null }[] = []
+    for (const [u, w] of [[0, 1], [1, 0], [0, -1], [-1, 0]]) {
+      const f1 = file(m.to) + u, r1 = rank(m.to) + w
+      if (!on(f1, r1)) continue
+      const s1 = sq(f1, r1), y = b[s1]
+      if (!y || y.side === me || MASS[y.kind] > SHOCK_MAX) continue
+      const f2 = f1 + u, r2 = r1 + w
+      if (!on(f2, r2)) { b[s1] = null; out.removed.push(y); revoke(p, s1, y); shock.push({ id: y.id, from: s1, to: null }); reset = true; continue }
+      const s2 = sq(f2, r2)
+      if (b[s2]) continue
+      b[s2] = y; b[s1] = null; revoke(p, s1, y); shock.push({ id: y.id, from: s1, to: s2 })
+    }
+    if (shock.length) out.shock = shock
+  }
   p.half = reset ? 0 : p.half + 1
   if (me === 'b') p.full++
   p.turn = other(me)
@@ -242,11 +296,11 @@ export function kingThreatened(p: Pos, side: Side, mode: Mode): boolean {
   const by = other(side)
   if (mode === 'classic') return attacked(p, k, by)
   const q = clone(p); q.turn = by; q.ep = -1
-  for (const m of pseudo(q)) {
+  for (const m of pseudo(q, mode)) {
     if (m.flag !== 'c' || (m.promo && m.promo !== 'q')) continue
     if (m.kind === 'n') { if (m.to === k) return true; continue }
     // only collisions whose line passes through the king can move it
-    const df = Math.sign(file(m.to) - file(m.from)), dr = Math.sign(rank(m.to) - rank(m.from))
+    const [df, dr] = moveDir(m)
     if (!lineThrough(m.to, df, dr).includes(k)) continue
     const r = make(q, m, mode)
     if (kingSq(r.pos, side) < 0) return true
@@ -255,7 +309,7 @@ export function kingThreatened(p: Pos, side: Side, mode: Mode): boolean {
 }
 export function legal(p: Pos, mode: Mode): Move[] {
   // in 衝 a pawn collision never reaches the last rank: one move, no promotion choice
-  const ms = mode === 'clash' ? pseudo(p).filter(m => !(m.flag === 'c' && m.promo && m.promo !== 'q')) : pseudo(p)
+  const ms = mode === 'clash' ? pseudo(p, mode).filter(m => !(m.flag === 'c' && m.promo && m.promo !== 'q')) : pseudo(p)
   return ms.filter(m => {
     const { pos } = make(p, m, mode)
     if (kingSq(pos, p.turn) < 0) return false

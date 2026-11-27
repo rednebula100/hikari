@@ -163,10 +163,20 @@ export class Stage {
     this.floor.add(table); this.lab.add(this.floor);
     // brass rulers along the cliff edges
     const brass = new T.MeshStandardMaterial({ color: 0xb08a4a, metalness: .95, roughness: .28 });
-    const half = (box.max.x - box.min.x) / 2 + .18, rl = half * 2 + .3;
-    for (const [x, z, ry] of [[0, -half, 0], [0, half, 0], [-half, 0, Math.PI / 2], [half, 0, Math.PI / 2]] as const) {
-      const bar = new T.Mesh(new T.BoxGeometry(rl, .05, .22), brass); bar.position.set(x, box.min.y + .025, z); bar.rotation.y = ry; bar.castShadow = bar.receiveShadow = true; this.floor.add(bar);
+    const inner = (box.max.x - box.min.x) / 2 + .07, outer = inner + .22;
+    const ring = new T.Shape(); ring.moveTo(-outer, -outer); ring.lineTo(outer, -outer); ring.lineTo(outer, outer); ring.lineTo(-outer, outer); ring.closePath();
+    const hole = new T.Path(); hole.moveTo(-inner, -inner); hole.lineTo(-inner, inner); hole.lineTo(inner, inner); hole.lineTo(inner, -inner); hole.closePath(); ring.holes.push(hole);
+    const rulers = new T.Mesh(new T.ExtrudeGeometry(ring, { depth: .05, bevelEnabled: true, bevelSize: .012, bevelThickness: .012, bevelSegments: 2 }), brass);
+    rulers.rotation.x = -Math.PI / 2; rulers.position.y = box.min.y; rulers.castShadow = rulers.receiveShadow = true; this.floor.add(rulers);
+    // engraved ticks along each edge, like a real rule
+    const tickGeo = new T.BoxGeometry(.012, .004, .07), tickMat = new T.MeshStandardMaterial({ color: 0x3a2a14, metalness: .4, roughness: .6 });
+    const ticks = new T.InstancedMesh(tickGeo, tickMat, 4 * 40), o = new T.Object3D(); let n = 0;
+    for (let side = 0; side < 4; side++) for (let i = 0; i < 40; i++) {
+      const u = -inner + (i + .5) * (2 * inner) / 40, w = (inner + outer) / 2, len = i % 5 === 0 ? 1.6 : 1;
+      const [x, z] = side === 0 ? [u, -w] : side === 1 ? [u, w] : side === 2 ? [-w, u] : [w, u];
+      o.position.set(x, box.min.y + .064, z); o.rotation.y = side < 2 ? 0 : Math.PI / 2; o.scale.set(1, 1, len); o.updateMatrix(); ticks.setMatrixAt(n++, o.matrix);
     }
+    this.floor.add(ticks);
     // blackboard far behind Black: the match is written up as it happens
     const cv = document.createElement('canvas'); cv.width = 2048; cv.height = 1024;
     const tex = new T.CanvasTexture(cv); tex.colorSpace = T.SRGBColorSpace;

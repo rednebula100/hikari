@@ -545,7 +545,7 @@ async function finished(): Promise<boolean> {
   if (!st.over) return false;
   screen = 'over'; busy = true;
   if (mode === 'clash') {
-    if (st.reason === 'checkmate') { register('cliffmate'); if (lastOut?.stomp) register('knightmate'); }
+    if (st.reason === 'checkmate') { register('cliffmate'); if (lastOut?.move.kind === 'n') register('knightmate'); }
     if (st.reason === 'stalemate') register('stalemate');
     if (st.reason === 'repetition') register('repetition');
   }
@@ -559,7 +559,7 @@ async function finished(): Promise<boolean> {
 /** The mating blow is actually played: the king goes over the cliff, the lamp dies. */
 async function finale() {
   const loser = pos.turn, q = { ...pos, board: pos.board.slice(), turn: other(loser), castling: { ...pos.castling } };
-  const kill = pseudo(q).find(m => m.flag === 'c' && kingSq(make(q, m, 'clash').pos, loser) < 0);
+  const kill = pseudo(q, 'clash').find(m => m.flag === 'c' && kingSq(make(q, m, 'clash').pos, loser) < 0);
   if (kill) {
     stage.reduced = false;
     const r = make(q, kill, 'clash');
@@ -637,6 +637,7 @@ function note() {
 function hint() {
   const e = EXPERIMENTS[exp];
   const [a, b] = e.move.map(parse);
+  if (e.via) { const v = parse(e.via); stage.chalk.path([[X(a), Z(a)], [X(v), Z(v)]], { dash: .16, color: '#9fd8ff', alpha: .55, dur: 200 }); stage.chalk.arrow([X(v), Z(v)], [X(b), Z(b)], { dash: .16, color: '#9fd8ff', alpha: .55, dur: 200, delay: 180 }); return; }
   stage.chalk.arrow([X(a), Z(a)], [X(b), Z(b)], { dash: .16, color: '#9fd8ff', alpha: .55, dur: 260 });
 }
 function explain() {
@@ -821,7 +822,6 @@ function openBook(tier?: number, sel?: number) {
 }
 function renderBook(anim = false) {
   stage.setLamp(TIERS[bookTier - 1].lamp); sound.setPitch(bookTier - 1);
-  void goWorld(TIER_WORLD[bookTier - 1], false);
   const total = solvedCount();
   const tiers = TIERS.map((T, i) => {
     const t = i + 1, open = tierOpen(t);

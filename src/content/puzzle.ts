@@ -45,7 +45,7 @@ export const uci = (m: Move) => name(m.from) + name(m.to) + (m.promo ?? '')
 // ── target problems ──────────────────────────────────────────────────────
 /** White's moves in a target problem (no legality beyond movement: there are no kings). */
 export function targetMoves(p: Pos): Move[] {
-  return pseudo(p).filter(m => !m.promo || m.promo === 'q')
+  return pseudo(p, 'clash').filter(m => !m.promo || m.promo === 'q')
 }
 /** One White move; Black never moves, so the turn returns to White. */
 export function targetStep(p: Pos, m: Move, newton = false): { pos: Pos; out: Outcome } {

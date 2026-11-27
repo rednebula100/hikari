@@ -36,7 +36,7 @@ function order(p: Pos, ms: Move[]) {
 function search(p: Pos, depth: number, alpha: number, beta: number, mode: Mode): number {
   const me = p.turn
   if (depth === 0) return evaluate(p, me, mode)
-  const ms = order(p, pseudo(p).filter(m => !(mode === 'clash' && m.flag === 'c' && m.promo && m.promo !== 'q')))
+  const ms = order(p, pseudo(p, mode).filter(m => !(mode === 'clash' && m.flag === 'c' && m.promo && m.promo !== 'q')))
   let best = -Infinity, any = false
   for (const m of ms) {
     const r = make(p, m, mode)

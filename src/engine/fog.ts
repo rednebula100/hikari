@@ -2,7 +2,7 @@
 // Light travels one square (Chebyshev) per ply and is observed at the King.
 // You pick moves on the board you SEE; they resolve on the board that IS.
 // No check rules (check may be invisible) — removing the enemy King wins.
-import { cheb, clone, file, kingSq, make, other, pseudo, rank, sq, type Move, type Outcome, type Piece, type Pos, type Side } from './rules.ts'
+import { MASS, STOMP_MAX, cheb, clone, file, kingSq, make, other, pseudo, rank, sq, type Move, type Outcome, type Piece, type Pos, type Side } from './rules.ts'
 
 export interface Sighting { piece: Piece; sq: number; alive: boolean; seenAt: number; age: number }
 
@@ -62,7 +62,7 @@ export function belief(truth: Pos, seen: readonly Sighting[], side: Side): Pos {
 
 /** Intended moves chosen on the belief board (no check filter: you cannot know). */
 export function intentions(bel: Pos): Move[] {
-  return pseudo(bel).filter(m => !(m.flag === 'c' && m.promo && m.promo !== 'q'))
+  return pseudo(bel, 'clash').filter(m => !(m.flag === 'c' && m.promo && m.promo !== 'q'))
 }
 
 export type Resolution = { kind: 'move'; move: Move } | { kind: 'blocked' | 'miss'; from: number; to: number }
@@ -77,6 +77,7 @@ export function resolve(truth: Pos, intent: Move): Resolution {
     for (let s = intent.from + step; s !== (intent.flag === 'k' ? intent.from + 3 : intent.from - 4); s += step) if (b[s]) return { kind: 'blocked', from: intent.from, to: intent.to }
     return { kind: 'move', move: intent }
   }
+  if (p.kind === 'n' && enemyAt(intent.to) && MASS[b[intent.to]!.kind] > STOMP_MAX) return { kind: 'blocked', from: intent.from, to: intent.to } // too heavy to crush
   if (p.kind === 'n' || p.kind === 'k') return { kind: 'move', move: base(intent.to, enemyAt(intent.to) ? 'c' : 'n') }
   if (p.kind === 'p') {
     if (file(intent.to) === file(intent.from)) {
@@ -86,13 +87,21 @@ export function resolve(truth: Pos, intent: Move): Resolution {
     }
     return enemyAt(intent.to) ? { kind: 'move', move: base(intent.to, 'c') } : { kind: 'miss', from: intent.from, to: intent.to }
   }
-  // sliders stop at the first real piece on the path
-  const df = Math.sign(file(intent.to) - file(intent.from)), dr = Math.sign(rank(intent.to) - rank(intent.from))
-  for (let f = file(intent.from) + df, r = rank(intent.from) + dr; ; f += df, r += dr) {
-    const s = sq(f, r)
-    if (b[s]) return b[s]!.side === me ? { kind: 'move', move: base(s - (dr * 8 + df), 'n') } : { kind: 'move', move: base(s, 'c') }
-    if (s === intent.to) return { kind: 'move', move: base(s, 'n') }
+  // sliders stop at the first real piece on the path (a cushion path bends once at `via`)
+  const path: number[] = []
+  const walk = (a: number, z: number) => { const df = Math.sign(file(z) - file(a)), dr = Math.sign(rank(z) - rank(a)); for (let f = file(a) + df, r = rank(a) + dr; ; f += df, r += dr) { path.push(sq(f, r)); if (sq(f, r) === z) break } }
+  if (intent.via !== undefined) { walk(intent.from, intent.via); walk(intent.via, intent.to) } else walk(intent.from, intent.to)
+  const leg = (i: number) => (intent.via !== undefined && i > path.indexOf(intent.via) ? { via: intent.via } : {})
+  for (let i = 0; i < path.length; i++) {
+    const s = path[i]
+    if (b[s]) {
+      if (b[s]!.side !== me) return { kind: 'move', move: { ...base(s, 'c'), ...leg(i) } }
+      const stop = i === 0 ? intent.from : path[i - 1]
+      return { kind: 'move', move: { ...base(stop, 'n'), ...(i - 1 > path.indexOf(intent.via ?? -1) && intent.via !== undefined ? { via: intent.via } : {}) } }
+    }
+    if (s === intent.to) return { kind: 'move', move: { ...base(s, 'n'), ...leg(i) } }
   }
+  return { kind: 'move', move: base(intent.to, 'n') }
 }
 
 /** Apply a resolution: a real move, or a wasted turn (the board only knows the clock moved). */
