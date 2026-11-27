@@ -1,5 +1,20 @@
 # Playtest & balance log
 
+## 2026-11-27 — v0.3 bot health check (`npx tsx tools/stats.ts 10`)
+| White vs Black AI | W/B/D | avg plies | intercepts/game |
+|---|---|---|---|
+| L1 vs L1 | 4/3/3 | 78 | 0.3 |
+| L2 vs L1 | 8/1/1 | 93 | 0.4 |
+| L1 vs L2 | 1/9/0 | 68 | 0.4 |
+| L2 vs L2 | 0/0/10 | 200 (limit) | 0.0 |
+| L3 vs L2 | 2/0/8 | 174 | 0.1 |
+| L3 vs L3 | 3/1/6 | 146 | 0.1 |
+
+Levels separate; equal AIs play cautiously into the 200-ply draw. Bots rarely use blind
+shots (they search their belief board), so fog tactics are mostly a human edge — to be
+watched in human playtests. Sections below concern the archived v0.2 design.
+
+
 Bot results are **not** evidence of fun; they find degenerate rules and dead
 mechanics. Human sessions are recorded with the in-game **기록 저장** button on the
 result screen (JSON: rules, build, seed, both sides' orders, events, per-round

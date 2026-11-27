@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { intercept, positionAt, properDuration, tauAt, causal, waveAt, wavePulses, WAVE_RECEIVER, pilotRatio, distance, retardedTime } from '../src/game/physics.ts'
-import type { Point, Leg } from '../src/game/physics.ts'
+import { intercept, positionAt, properDuration, tauAt, causal, waveAt, wavePulses, WAVE_RECEIVER, pilotRatio, distance, retardedTime } from '../src/lab/physics.ts'
+import type { Point, Leg } from '../src/lab/physics.ts'
 
 const p = (x: number, z = 0): Point => ({ x, z })
 const leg = (start: number, end: number, from: Point, to: Point): Leg => ({ start, end, from, to })

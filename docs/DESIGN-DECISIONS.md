@@ -1,4 +1,45 @@
-# Design decisions (v0.2 — CAUSAL MATCH)
+# Design decisions
+
+## v0.3 — Relativistic Chess (2026-11-27, user direction)
+
+### C1. Chess first
+The user wanted a chess game and found v0.2 hard to understand. v0.3 keeps standard
+chess (8×8 squares, standard moves, auto-queen promotion; no castling / en passant yet)
+and adds exactly one physical rule. Win = capture the King (check cannot be announced
+because it may be invisible).
+
+### C2. One rule: light moves one square (Chebyshev) per ply, observed at the King
+Discrete light cone as in cellular automata (Game of Life, c = 1 cell/generation).
+Adjacent squares are live; a square d away is seen d−1 plies late. Computed exactly over
+the King's whole worldline (`observe()` in `src/chess/game.ts`), tested against the cone.
+
+### C3. Own army is linked; contact reveals
+Own piece positions/losses are known instantly (command link) — a deliberate abstraction
+so players never lose track of their own army. Pieces that touch yours (captures, a pawn
+blocked by a hidden piece) are seen at that instant.
+
+### C4. Choose on belief, resolve on truth
+Moves are legal if legal on your own view (own pieces block). Sliders stop at the first
+real piece and capture it ("intercept"); blind pawn diagonals can miss; pawn pushes can
+be blocked. This turns long moves into probes — the main tactical novelty.
+
+### C5. Afterimage
+Your opponent sees your past. The `E` view computes their knowledge of you from the
+enemy King trajectory you have seen (frozen after its last sighting) — honest, and the
+basis for bluffing.
+
+### C6. UI
+Indie-game minimal: title with two buttons (시작 / 튜토리얼; 시작 routes to the tutorial
+until it is completed), one status pill, three icon tools, capture trays. No panels.
+
+### C7. Removed from v0.2
+NEXUS scoring, Courier/Relay/Phaser, phase interference, simultaneous turns, 9×9 vertices.
+The continuous physics module remains in `src/lab/` for the research track (spec Part IV/VI).
+
+---
+
+# v0.2 decisions (archived)
+
 
 Changes against `HIKARI-MASTER-SPEC.md` v0.1.x, with reasons. Every rule below is
 implemented in `src/game/` and covered by `tests/`.

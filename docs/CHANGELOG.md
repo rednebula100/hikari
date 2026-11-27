@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 — 빛의 체스 (2026-11-27)
+- Redesign as relativistic chess: standard chess + light at one square per move seen from the King.
+- Blind shots (sliders stop at the first real piece), pawn miss/blocked, contact sightings, King capture wins.
+- Afterimage view (what the enemy sees of you) and the light pyramid (board sinks into time).
+- Fog-aware AI (3 levels) on its own belief board.
+- New minimal UI, procedural chess pieces, 6-step forced tutorial.
+- Master spec rewritten to v0.3; v0.2 game code removed (in git history).
+
 ## 0.2.1 — balance pass (2026-11-27)
 - New courier action SKEW (rhythm delay) as counterplay to phase ambushes.
 - AI L3: reactive + pre-emptive skews, ambush re-planning when the rhythm changes.

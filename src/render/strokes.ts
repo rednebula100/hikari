@@ -3,7 +3,7 @@ import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 
-import type { Point } from '../game/physics';
+type Point = { x: number; z: number };
 
 export type V3 = readonly [number, number, number];
 const TAU = Math.PI * 2;

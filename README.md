@@ -1,48 +1,38 @@
-# 光
+# 光 — 빛의 체스
 
-> 당신이 보는 모든 것은 과거이고, 당신의 명령은 미래에 도착한다.
-
-A simultaneous-turn strategy game where the speed of light is the only rule.
-Two command cores fight over three NEXUS nodes on an 8×8 board where every order,
-every sighting and every data packet travels at **c = 1 square/second**.
+> 체스의 규칙은 그대로. 단 하나 — 빛은 한 수에 한 칸만 간다.
 
 **Play:** https://rednebula100.github.io/hikari/ (desktop, mouse & keyboard)
 
-## What makes it different
+## Rules in 30 seconds
 
-- **You only ever see your past light cone.** Pieces are drawn where their light
-  left them; the farther away, the older. Your plans are gold ghosts.
-- **TEMPORAL PRISM** (`2` / `Space`): the board unfolds along a time axis. Every
-  solid piece sits on the cone of light arriving at your core; worldlines, orders
-  and packets are light-like lines; enemy possibility regions are 0.8c cones.
-- **Proper time matters.** Couriers calibrate on their own clock — the fastest
-  arrival is not the fastest *ready* time.
-- **Phase eclipse.** A PHASER can annihilate an enemy data packet at its receiver
-  with an anti-phase pulse — if amplitude, timing and phase are all right.
-- **CAUSAL LOCK.** A proven (not estimated) bound on when the enemy can possibly
-  contest each NEXUS.
+1. It is chess. Same pieces, same moves. **Capture the enemy King to win** (there is no check — you may not see it coming).
+2. **You see from your King, and light travels one square per move.** An enemy piece far away is shown as it was a few moves ago (the small number = how many enemy moves old).
+3. You choose moves on the board you *see*; they resolve on the board that *is*. A rook fired into the fog stops at the first real piece — sometimes capturing something you never saw. A pawn attacking an empty square misses.
 
-## Modes
+## What's new about it
 
-- **Causal Trials I–IV** — engine-verified puzzles (first light, two clocks, majority, the silent receiver).
-- **Skirmish** — 48 s / 24 rounds vs. three AI levels that see exactly what you see.
+- **King = eye.** Advance your King to see clearly; it also walks into danger.
+- **Shooting into the past.** Long moves are blind shots that detect and capture hidden pieces.
+- **Afterimage (`E`).** The enemy sees *your* past. See what they currently believe, and bluff with it.
+- **Light pyramid (`Space`).** The board sinks into time around your King: the farther a square, the deeper in the past you see it.
 
-## Controls
-
-Click a unit, click a node to add a MOVE · right-click undo · `1 2 3` views ·
-`Space` unfold time · `Enter` transmit & run · `Q/E` scrub · `Ctrl+Z/Y` · `Tab` next unit.
+First launch runs a 6-step interactive tutorial.
 
 ## Develop
 
 ```
 npm install
-npm run dev      # http://127.0.0.1:5173
-npm test         # physics, engine, information isolation, trial solutions, AI determinism
+npm run dev
+npm test                       # rules, light-cone visibility, blind shots, afterimage, AI, tutorial solvability
+npx tsx tools/stats.ts 10      # bot-vs-bot health check
 npm run build
-npx tsx tools/balance.ts 20      # seeded AI-vs-AI balance matrix (also: sweep, ties)
 ```
 
-Architecture: `src/game` is a headless deterministic event engine (truth),
-`knowledge.ts` is the only bridge to UI/AI (past-light-cone filter),
-`src/render` draws only that knowledge. See `HIKARI-MASTER-SPEC.md` and
-`docs/DESIGN-DECISIONS.md`.
+- `src/chess/game.ts` — authoritative engine + per-side `view()` (the only thing UI/AI see)
+- `src/chess/ai.ts` — opponent searching its own belief board (3 levels)
+- `src/chess/tutorial.ts` — lessons
+- `src/render/` — Three.js board, procedural pieces, light pyramid
+- `src/lab/physics.ts` — the v0.1 continuous relativity model, kept for research
+
+Design: `HIKARI-MASTER-SPEC.md` (v0.3), decisions in `docs/DESIGN-DECISIONS.md`.
