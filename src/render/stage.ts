@@ -3,6 +3,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { loadSet, type ChessSet } from './assets';
 import { Chalk } from './chalk';
 import { Debris } from './physics';
+import { buildWorld, type Built, type WorldId } from './worlds';
 import { C, gamma } from '../engine/collide';
 import { MASS, cheb, file, rank, type Outcome, type Pos, type Piece, type Kind, type Side } from '../engine/rules';
 import type { Sound } from '../ui/audio';
@@ -28,7 +29,7 @@ export function kelvin(k: number): T.Color {
 export class Stage {
   readonly renderer: T.WebGLRenderer;
   readonly scene = new T.Scene();
-  readonly camera = new T.PerspectiveCamera(34, 1, .05, 200);
+  readonly camera = new T.PerspectiveCamera(34, 1, .05, 900);
   set!: ChessSet;
   chalk!: Chalk;
   surface = 0.28;
@@ -43,6 +44,13 @@ export class Stage {
   private board!: T.Object3D;
   /** The table and its brass rulers: they step aside when the pyramid opens below the board. */
   private floor = new T.Group();
+  /** Everything that belongs to the night lab only (lamp, table, rulers, blackboard). */
+  private lab = new T.Group();
+  private rim!: T.DirectionalLight; private fill!: T.HemisphereLight;
+  private worlds = new Map<WorldId, Built>();
+  world: WorldId = 'lab';
+  private ground: T.Object3D = this.floor;
+  private keyI = 220;
   private boardChalk!: { canvas: HTMLCanvasElement; tex: T.CanvasTexture; lines: string[] };
   private last = performance.now();
   private size = { w: 1, h: 1 };
@@ -124,9 +132,9 @@ export class Stage {
     this.spot = new T.SpotLight(0xffc98a, 220, 30, .62, .75, 1.6);
     this.spot.position.copy(bulbPos); this.spot.target.position.set(0, 0, 0);
     this.spot.castShadow = true; this.spot.shadow.mapSize.set(2048, 2048); this.spot.shadow.bias = -.00015; this.spot.shadow.radius = 4;
-    const rim = new T.DirectionalLight(0x8fb6ff, .55); rim.position.set(-6, 3.5, 9);
-    const fill = new T.HemisphereLight(0x2a3550, 0x0b0806, .25);
-    this.scene.add(this.spot, this.spot.target, rim, fill);
+    const rim = this.rim = new T.DirectionalLight(0x8fb6ff, .55); rim.position.set(-6, 3.5, 9);
+    const fill = this.fill = new T.HemisphereLight(0x2a3550, 0x0b0806, .25);
+    this.scene.add(this.spot, this.spot.target, rim, fill, this.lab);
     const bulb = new T.Mesh(new T.SphereGeometry(.18, 24, 16), new T.MeshBasicMaterial({ color: 0xfff0c8, toneMapped: false }));
     bulb.position.copy(bulbPos);
     const shade = new T.Mesh(new T.ConeGeometry(.75, .55, 40, 1, true), new T.MeshStandardMaterial({ color: 0x1c1d20, metalness: .8, roughness: .35, side: T.DoubleSide }));
@@ -144,7 +152,7 @@ export class Stage {
     for (let i = 0; i < N; i++) { const h = Math.random(), r = Math.sqrt(Math.random()) * 6 * (1 - h); const a = Math.random() * Math.PI * 2; pos.set([Math.cos(a) * r, h * bulbPos.y, bulbPos.z + Math.sin(a) * r], i * 3); }
     dustGeo.setAttribute('position', new T.BufferAttribute(pos, 3));
     this.dust = new T.Points(dustGeo, new T.PointsMaterial({ color: 0xffdcaa, size: .035, transparent: true, opacity: .55, depthWrite: false, blending: T.AdditiveBlending }));
-    this.scene.add(bulb, shade, cord, cone, this.dust);
+    this.lab.add(bulb, shade, cord, cone, this.dust);
     // walnut lab table
     const wood = document.createElement('canvas'); wood.width = 1024; wood.height = 1024; const w = wood.getContext('2d')!;
     w.fillStyle = '#20150f'; w.fillRect(0, 0, 1024, 1024);
@@ -152,7 +160,7 @@ export class Stage {
     const wt = new T.CanvasTexture(wood); wt.wrapS = wt.wrapT = T.RepeatWrapping; wt.repeat.set(3, 3); wt.colorSpace = T.SRGBColorSpace;
     const table = new T.Mesh(new T.PlaneGeometry(60, 60), new T.MeshStandardMaterial({ map: wt, roughness: .55, metalness: .05 }));
     table.rotation.x = -Math.PI / 2; table.position.y = box.min.y - .002; table.receiveShadow = true;
-    this.floor.add(table); this.scene.add(this.floor);
+    this.floor.add(table); this.lab.add(this.floor);
     // brass rulers along the cliff edges
     const brass = new T.MeshStandardMaterial({ color: 0xb08a4a, metalness: .95, roughness: .28 });
     const half = (box.max.x - box.min.x) / 2 + .18, rl = half * 2 + .3;
@@ -163,9 +171,9 @@ export class Stage {
     const cv = document.createElement('canvas'); cv.width = 2048; cv.height = 1024;
     const tex = new T.CanvasTexture(cv); tex.colorSpace = T.SRGBColorSpace;
     const bb = new T.Mesh(new T.PlaneGeometry(18, 9), new T.MeshStandardMaterial({ map: tex, roughness: .9, color: 0x9aa59c }));
-    bb.position.set(0, 5.2, 16); bb.rotation.y = Math.PI; this.scene.add(bb);
+    bb.position.set(0, 5.2, 16); bb.rotation.y = Math.PI; this.lab.add(bb);
     const frame = new T.Mesh(new T.BoxGeometry(18.6, 9.6, .2), new T.MeshStandardMaterial({ color: 0x3a2a1c, roughness: .7 }));
-    frame.position.set(0, 5.2, 16.12); this.scene.add(frame);
+    frame.position.set(0, 5.2, 16.12); this.lab.add(frame);
     this.boardChalk = { canvas: cv, tex, lines: [] };
     this.writeBlackboard([]);
   }
@@ -226,7 +234,7 @@ export class Stage {
   private updatePyramid(u: number) {
     const H = .5, top = this.surface, eye = this.pyr.eye;
     this.board.visible = u < .25;
-    this.floor.visible = u < .2;
+    this.ground.visible = u < .2;
     this.chalk.mesh.visible = u < .05;
     if (u > .05) this.hoverMesh.visible = false;
     const t = this.tiles!; t.visible = u > .003;
@@ -581,11 +589,48 @@ export class Stage {
     this.renderer.setPixelRatio(this.dprCap);
     this.renderer.setSize(this.size.w, this.size.h, false); this.camera.aspect = this.size.w / this.size.h; this.camera.updateProjectionMatrix();
   }
-  lampFlicker(on: boolean) { this.lampOn = on; if (this.spot) this.spot.intensity = on ? 220 : 0; }
+  lampFlicker(on: boolean) { this.lampOn = on; if (this.spot) this.spot.intensity = on ? this.keyI : 0; }
+  private boardTop = 0;
+  /** Move the board to another place. The swap itself is instant; the UI covers it with a fade. */
+  setWorld(id: WorldId) {
+    if (!this.spot || id === this.world) return;
+    const box = new T.Box3().setFromObject(this.board); this.boardTop = box.min.y;
+    for (const [k, w] of this.worlds) w.group.visible = k === id;
+    this.lab.visible = id === 'lab';
+    this.world = id;
+    if (id === 'lab') {
+      this.ground = this.floor;
+      this.spot.position.set(0, 9.2, .4); this.spot.angle = .62; this.spot.penumbra = .75; this.spot.color.copy(this.lampColor);
+      this.keyI = 220; this.rim.color.set(0x8fb6ff); this.rim.intensity = .55; this.rim.position.set(-6, 3.5, 9);
+      this.fill.color.set(0x2a3550); this.fill.groundColor.set(0x0b0806); this.fill.intensity = .25;
+      this.scene.fog = new T.FogExp2(0x05060a, .012); this.renderer.toneMappingExposure = 1; this.renderer.setClearColor(0x05060a);
+      this.scene.environmentIntensity = .22;
+    } else {
+      let w = this.worlds.get(id);
+      if (!w) { w = buildWorld(id, this.boardTop); this.worlds.set(id, w); this.scene.add(w.group); }
+      w.group.visible = true; this.ground = w.ground;
+      const L = w.light;
+      this.spot.position.set(...L.keyPos); this.spot.angle = L.keyAngle; this.spot.penumbra = L.penumbra; this.spot.color.set(L.key); this.keyI = L.keyI;
+      this.rim.color.set(L.rim); this.rim.intensity = L.rimI; this.rim.position.set(...L.rimPos);
+      this.fill.color.set(L.sky); this.fill.groundColor.set(L.gnd); this.fill.intensity = L.hemiI;
+      this.scene.fog = L.fogD > 0 ? new T.FogExp2(L.fog, L.fogD) : null; this.renderer.toneMappingExposure = L.exposure; this.renderer.setClearColor(L.bg);
+      this.scene.environmentIntensity = L.env;
+    }
+    this.spot.intensity = this.lampOn ? this.keyI : 0;
+    this.shadowDirty = true;
+  }
+  /** Establishing shot: start level with the horizon (the sky of the new place), then tilt down onto the board. */
+  establish(ms = 2600) {
+    if (this.reduced) return;
+    const p1 = .9, d1 = 21.5;
+    this.pitch = .02; this.dist = 30; this.yaw = 0;
+    this.camera.position.set(0, this.surface + 2, -30); this.look.set(0, 2, 20);
+    void this.tween(ms, u => { const k = u < .25 ? 0 : (u - .25) / .75, e = k * k * (3 - 2 * k); this.pitch = .02 + (p1 - .02) * e; this.dist = 30 + (d1 - 30) * e; });
+  }
   /** Colour temperature of the lamp (the problem book cools the room as difficulty rises). */
   setLamp(k: number) {
     this.lampColor = k <= 2800 ? new T.Color(0xffc98a) : kelvin(k);
-    if (!this.spot) return;
+    if (!this.spot || this.world !== 'lab') return;
     this.spot.color.copy(this.lampColor);
     this.cone.material.uniforms.tint.value.copy(this.lampColor);
     (this.dust.material as T.PointsMaterial).color.copy(this.lampColor).lerp(new T.Color(0xffffff), .25);
@@ -616,6 +661,7 @@ export class Stage {
     const dt = Math.min(60, now - this.last); this.last = now;
     this.anims = this.anims.filter(a => a.update(now));
     const physics = this.debris.step(dt), rocking = this.wobble(dt);
+    if (this.world !== 'lab') this.worlds.get(this.world)?.update(now / 1000);
     if (physics || rocking) this.shadowDirty = true;
     // camera: player seat with slow breathing, or the collision rail
     const goal = this.pyr.on ? 1 : 0;

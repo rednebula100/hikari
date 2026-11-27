@@ -13,3 +13,5 @@
 | `public/brand/rednebula-mark.webp` | studio logo (cropped from rednebula100/rednebula100 `logo.png`) | © Red Nebula — owner's own mark |
 
 All sounds are synthesized at runtime. No GPL code is used.
+
+| three.js `Sky` (examples/jsm/objects/Sky.js, Preetham model) | sunset sky of the sea world | MIT |

@@ -76,7 +76,7 @@ export function riders(root: ParentNode) {
     if (!items.length) return
     const r = document.createElement('div'); r.className = 'rider'; r.innerHTML = '<i></i>'; list.prepend(r)
     const place = (el: HTMLElement, anim: boolean) => {
-      const y = el.offsetTop + el.offsetHeight / 2 - 10
+      const y = el.offsetTop + el.offsetHeight / 2 - r.offsetHeight / 2
       if (anim) gsap.to(r, { y, duration: .34, ease: 'power3.out', overwrite: true }); else gsap.set(r, { y })
     }
     const home = () => list.querySelector<HTMLElement>(':scope > .sel') ?? list.querySelector<HTMLElement>(':scope > .main') ?? items[0]
@@ -90,7 +90,7 @@ export function riders(root: ParentNode) {
     const r = document.createElement('i'); r.className = 'srider'; seg.append(r)
     const key = btns.map(b => b.textContent).join('|')
     const to = (b: HTMLElement, anim: boolean) => {
-      const v = { x: b.offsetLeft + 4, width: b.offsetWidth - 8 }
+      const v = { x: b.offsetLeft + 6, width: b.offsetWidth - 12 }
       if (anim) gsap.to(r, { ...v, duration: .32, ease: 'power3.out', overwrite: true }); else gsap.set(r, v)
     }
     const on = () => seg.querySelector<HTMLElement>(':scope > button.on') ?? btns[0]

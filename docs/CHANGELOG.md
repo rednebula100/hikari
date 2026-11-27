@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.0 — worlds, nocturne UI (2026-11-27)
+- **Worlds** (`src/render/worlds.ts`): the problem tiers move the board — ★1–2 night lab, ★3–4 a little boat on the
+  sunset sea (three.js Sky + own ocean shader), ★5–6 a marble plinth above a moonlit cloud sea, ★7–8 an ice slab under
+  the aurora, ★9 orbit above a blue planet, ★10 under the pinwheel of WR 104. Matches pick a world at random; tutorial
+  and title stay in the lab. Transition: fade to dark, swap, an establishing shot from the horizon down onto the board,
+  and a name card. Hand-written shaders, no reflection passes.
+- **UI v4 「야상곡」**: night glass panels with one brass hairline and a slowly drifting chess lattice; a slim brass bar
+  slides along menus; square vermilion seals and the v2 problem cells are back. Notebook tutorial unchanged.
+- **Board chalk**: hovering a target grows its dot into a ring (nothing else redraws); the click preview grows out of
+  the selection and target rings. Fixed instant chalk strokes drawing only part of a circle (divide by zero).
+
 ## 0.5.1 — the lamp's UI, real tumbling, click-to-preview (2026-11-27)
 - **UI v3 「램프 아래의 실험대」** (replaces v2): derived from the scene's own materials — walnut cases with brass inlay and
   corner guards, engraved brass nameplates, an ivory optical-bench ruler with a brass **rider** that glides to the item

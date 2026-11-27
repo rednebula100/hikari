@@ -8,6 +8,7 @@ interface Stroke {
   pts: P[]; text?: string; size?: number
   color: string; width: number; dash?: number; alpha: number
   t0: number; dur: number; seed: number
+  tag: string
 }
 const EXTENT = 12; // canvas covers a 12×12 world square centred on the board
 
@@ -23,6 +24,9 @@ export class Chalk {
   private get clock() { return performance.now(); }
   /** Drawing speed multiplier (the aiming sketch draws fast so it is finished before the eye moves on). */
   tempo = 1;
+  /** Strokes made now belong to this layer; a layer can be wiped alone (selection, hover ring, preview). */
+  layer = '';
+  remove(tag: string) { const n = this.strokes.length; this.strokes = this.strokes.filter(s => s.tag !== tag); if (this.strokes.length !== n) this.dirty = true; }
 
   constructor(y: number) {
     this.canvas.width = this.canvas.height = 2048;
@@ -49,7 +53,7 @@ export class Chalk {
 
   path(pts: P[], o: { color?: string; width?: number; dash?: number; delay?: number; dur?: number; alpha?: number } = {}) {
     this.strokes.push({ kind: 'path', pts, color: o.color ?? '#f3efe2', width: o.width ?? 0.07, dash: o.dash, alpha: o.alpha ?? 0.92,
-      t0: this.clock + (o.delay ?? 0) / this.tempo, dur: (o.dur ?? 220) / this.tempo, seed: Math.random() * 1000 });
+      t0: this.clock + (o.delay ?? 0) / this.tempo, dur: (o.dur ?? 220) / this.tempo, seed: Math.random() * 1000, tag: this.layer });
     this.dirty = true;
   }
   arrow(a: P, b: P, o: Parameters<Chalk['path']>[1] & { head?: number } = {}) {
@@ -70,7 +74,7 @@ export class Chalk {
   }
   text(text: string, at: P, o: { size?: number; color?: string; delay?: number; dur?: number; alpha?: number } = {}) {
     this.strokes.push({ kind: 'text', pts: [at], text, size: o.size ?? 0.42, color: o.color ?? '#f3efe2', width: 0, alpha: o.alpha ?? 0.95,
-      t0: this.clock + (o.delay ?? 0) / this.tempo, dur: (o.dur ?? 32 * text.length + 120) / this.tempo, seed: 0 });
+      t0: this.clock + (o.delay ?? 0) / this.tempo, dur: (o.dur ?? 32 * text.length + 120) / this.tempo, seed: 0, tag: this.layer });
     this.dirty = true;
   }
 
@@ -88,8 +92,8 @@ export class Chalk {
     }
     const k = 2048 / EXTENT;
     for (const s of this.strokes) {
-      const prog = Math.min(1, Math.max(0, (this.clock - s.t0) / s.dur));
-      if (prog <= 0) continue;
+      const prog = this.clock < s.t0 ? 0 : s.dur <= 0 ? 1 : Math.min(1, (this.clock - s.t0) / s.dur);
+      if (!(prog > 0)) continue;
       c.globalAlpha = s.alpha * fade;
       c.strokeStyle = c.fillStyle = s.color;
       if (s.kind === 'text') {

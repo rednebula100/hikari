@@ -10,6 +10,7 @@ import { Sound } from './audio';
 import { store, loadSettings, saveSettings, loadBook, saveBook, loadCodex, saveCodex, today, type Progress, type CodexState } from './store';
 import { gsap, toast, reveal, openPanel, stamp, discovery, scramble, riders } from './fx';
 import { Loader } from './loader';
+import { WORLDS, TIER_WORLD, type WorldId } from '../render/worlds';
 import { intro } from './intro';
 import { ENTRIES, GROUPS, RARITY, byId, detect, newTally, type GameTally } from '../content/codex';
 import { targetMoves, targetStep, emptyTally, addTally, achieved, findMove, mated, defend, uci, type Puzzle, type Seal, type Tally } from '../content/puzzle';
@@ -112,6 +113,35 @@ function witness(before: Pos, out: Outcome, mover: Side) {
   for (const id of detect(before, out, mover, tally)) register(id, where);
 }
 
+// ── worlds: the lamp goes out, the board is somewhere else, the camera looks up and then down ──
+let worldToken = 0;
+/** The world whose establishing shot the player has just seen (cleared when leaving play). */
+let vista: WorldId | '' = '';
+async function goWorld(id: WorldId, establish = true, note = '') {
+  if (!establish) { vista = ''; gsap.killTweensOf($('wname')); gsap.set($('wname'), { opacity: 0 }); }
+  if (stage.world === id && (!establish || vista === id)) return;
+  const token = ++worldToken, fade = $('fade');
+  if (stage.world !== id) {
+    await new Promise<void>(r => { gsap.to(fade, { opacity: 1, duration: .45, ease: 'power2.in', overwrite: true, onComplete: () => r() }); setTimeout(r, 700); });
+    if (token !== worldToken) return;
+    stage.setWorld(id);
+  }
+  if (establish && id !== 'lab') stage.establish();
+  if (establish) vista = id;
+  gsap.to(fade, { opacity: 0, duration: 1.2, ease: 'power2.out', overwrite: true });
+  if (establish && id !== 'lab') {
+    const W = WORLDS.find(w => w.id === id)!, card = $('wname');
+    (card.querySelector('.t') as HTMLElement).textContent = W.name;
+    (card.querySelector('.s') as HTMLElement).textContent = note || W.sub;
+    gsap.timeline().fromTo(card, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: .8, ease: 'power3.out', delay: .4 }).to(card, { opacity: 0, y: -6, duration: .7, delay: 1.5 });
+  }
+}
+let lastRandom: WorldId = 'lab';
+function randomWorld(): WorldId {
+  const pool = WORLDS.map(w => w.id).filter(w => w !== lastRandom);
+  return (lastRandom = pool[Math.floor(Math.random() * pool.length)]);
+}
+
 // ── boot ────────────────────────────────────────────────────────────────
 async function boot() {
   clearScreen();
@@ -138,6 +168,7 @@ async function title(instant: boolean) {
   const token = ++titleToken;
   $('hud').hidden = true; $('note').hidden = true; stage.chalk.clearNow(); stage.clearStrobe();
   stage.writeBlackboard([]); board = []; stage.setLamp(2700); sound.setPitch(0);
+  if (stage.world !== 'lab') void goWorld('lab', false);
   const demo = fromFen('8/8/8/8/Q2qqqq1/8/8/8 w - - 0 1');
   stage.sync(demo); stage.resetCamera(); stage.aimZ = -.6; stage.aimX = innerWidth > innerHeight * 1.1 ? 2.4 : 0;
   clearScreen();
@@ -170,7 +201,7 @@ function showTitleMenu(instant: boolean) {
     + row('t-tut', '04', '실험 노트', tutorialDone() ? '다시 보기' : '처음이라면')
     + row('t-set', '05', '설정', '')
     + '</div></div>'
-    + '<div class="foot l"><span class="lbl">Red Nebula · v0.5</span></div><div class="foot r"><button id="t-sound">' + (sound.muted ? '소리 켜기' : '소리 끄기') + '</button><button id="t-credits">크레딧</button></div>';
+    + '<div class="foot l"><span class="lbl">Red Nebula · v0.6</span></div><div class="foot r"><button id="t-sound">' + (sound.muted ? '소리 켜기' : '소리 끄기') + '</button><button id="t-credits">크레딧</button></div>';
   $('t-start').onclick = () => { sound.unlock(); if (tutorialDone()) matchSetup(); else { toast('처음이군요 — 실험 노트부터 펼칩니다'); controls(); } };
   $('t-book').onclick = () => { sound.unlock(); openBook(); };
   $('t-codex').onclick = () => { sound.unlock(); openCodex(); };
@@ -270,6 +301,7 @@ function newGame() {
   stage.resetCamera(); stage.aimZ = -.7; stage.aimX = 0; stage.lampFlicker(true); stage.setLamp(2700); sound.setPitch(0); sound.ambience(true);
   pyramid = false; $('btn-pyr').hidden = variant !== 'light'; $('btn-pyr').classList.remove('on'); stage.setPyramid(false, 0, new Map());
   if (variant === 'light') refreshLight();
+  void goWorld(randomWorld());
   setStatus(variant === 'light' ? '멀리 있는 것은 과거다' : '백의 차례', false, variant === 'light' ? '光 · 백' : variant === 'clash' ? '衝 · ' + LEVEL_NAME[level] : '클래식');
 }
 
@@ -290,29 +322,46 @@ function drawMarks() {
   if (pz.from >= 0) c.circle([X(pz.from), Z(pz.from)], .44, { color: '#ffd59a', dur: 0 });
 }
 function drawSelection() {
-  const c = stage.chalk; c.clearNow(); drawMarks(); if (selected < 0) pending = null;
+  const c = stage.chalk; c.clearNow(); drawMarks(); pending = null; hoverRing = -1;
   if (selected < 0) return;
-  c.circle([X(selected), Z(selected)], .44, { dur: 120, alpha: .9 });
+  c.circle([X(selected), Z(selected)], .44, { dur: 140, alpha: .9 });
   for (const m of targetsOf(selected)) {
     if (m.promo && m.promo !== 'q') continue;
-    if (m.flag === 'c') c.circle([X(m.to), Z(m.to)], .4, { dur: 100, alpha: .75, color: '#ffc98a', dash: .1 });
+    if (m.flag === 'c') c.circle([X(m.to), Z(m.to)], .12, { dur: 80, alpha: .8, color: '#ffc98a' });
     else c.circle([X(m.to), Z(m.to)], .09, { dur: 60, alpha: .7 });
   }
 }
-/** Hover only lights the square; the preview belongs to the click (see onSquare). */
-function onHover(sq: number) { stage.setHover(sq); }
+/** Hover grows the hovered target's dot into a ring — only that ring moves; nothing else is redrawn. */
+let hoverRing = -1;
+function onHover(sq: number) {
+  stage.setHover(sq);
+  const c = stage.chalk;
+  const ok = !busy && selected >= 0 && (screen === 'play' || screen === 'lesson' || screen === 'puzzle') && !declaring()
+    && targetsOf(selected).some(m => m.to === sq);
+  const want = ok ? sq : -1;
+  if (want === hoverRing) return;
+  hoverRing = want; c.remove('hover');
+  if (want < 0 || (pending && pending.to === want)) return;
+  const cap = !!pos.board[want];
+  c.layer = 'hover';
+  c.circle([X(want), Z(want)], .42, { dur: 150, alpha: .85, color: cap ? '#ffc98a' : '#f3efe2' });
+  c.layer = '';
+}
 /** Second-stage selection: a target was clicked once and its outcome is chalked; clicking it again plays it. */
 let pending: Move | null = null;
 function preview(m: Move) {
   const c = stage.chalk;
-  const quiet = () => { c.clearNow(); drawMarks(); c.circle([X(m.from), Z(m.from)], .44, { dur: 0, alpha: .9 }); c.arrow([X(m.from), Z(m.from)], [X(m.to), Z(m.to)], { dash: .12, alpha: .8, dur: 140 }); c.circle([X(m.to), Z(m.to)], .4, { delay: 100, dur: 120, color: '#ffc98a' }); };
+  c.remove('hover'); hoverRing = -1;
+  // the clicked target keeps a ring; the preview grows out of the two rings
+  c.remove('target'); c.layer = 'target'; c.circle([X(m.to), Z(m.to)], .42, { dur: 0, alpha: .9, color: '#ffc98a' }); c.layer = '';
+  const quiet = () => { c.remove('pre'); c.layer = 'pre'; c.tempo = 2.4; const a = [X(m.from), Z(m.from)], b = [X(m.to), Z(m.to)], d = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, u = [(b[0] - a[0]) / d, (b[1] - a[1]) / d];
+    c.arrow([a[0] + u[0] * .46, a[1] + u[1] * .46], [b[0] - u[0] * .46, b[1] - u[1] * .46], { dash: .12, alpha: .8, dur: 160 }); c.tempo = 1; c.layer = ''; };
   if (!aimOn) return quiet();
   if (screen === 'puzzle' && puz) {
     const s = puz.seals;
     if (s.includes('盲') || puz.goal.type === 'mate') return quiet();
-    sketch(stage.chalk, pos, m, 'clash', { half: s.includes('半'), classical: s.includes('速') }); drawMarks();
+    sketch(stage.chalk, pos, m, 'clash', { half: s.includes('半'), classical: s.includes('速') });
   } else sketch(stage.chalk, pos, m, mode, { newton: screen === 'lesson' && EXPERIMENTS[exp].newton });
-  stage.chalk.circle([X(m.to), Z(m.to)], .47, { dur: 0, alpha: .55, color: '#ffc98a', dash: .08 });
 }
 async function onSquare(sq: number, button: number) {
   sound.unlock();
@@ -549,6 +598,7 @@ function experiment(i: number, withControls = false) {
   resetBoard(e.fen);
   clearScreen(); $('hud').hidden = false; hudFor('lesson');
   stage.resetCamera(); stage.aimZ = -3.3; stage.aimX = 0; stage.lampFlicker(true); stage.setLamp(2700); sound.setPitch(0); sound.ambience(true);
+  if (stage.world !== 'lab') void goWorld('lab', false);
   if (withControls) { Object.assign(ctl, { select: false, rotate: false, zoom: false, cancel: false }); expPhase = 'controls'; setStatus('조작', false, '실험 노트 · 00'); note(); openPanel($('note')); return; }
   setStatus(e.title.replace(/^실험 \d+ · /, ''), false, '실험 노트 · ' + pad(i + 1, 2));
   expPhase = e.predict ? 'predict' : 'do';
@@ -626,6 +676,7 @@ async function openPuzzle(p: Puzzle) {
   pyramid = false; $('btn-pyr').hidden = true; stage.setPyramid(false, 0, new Map());
   stage.resetCamera(); stage.aimZ = -1.1; stage.aimX = innerWidth > innerHeight * 1.1 ? 1.3 : 0; stage.lampFlicker(true); stage.setLamp(TIERS[p.tier - 1].lamp); sound.setPitch(p.tier - 1); sound.ambience(true);
   resetPuzzle();
+  void goWorld(TIER_WORLD[p.tier - 1], true, '★' + p.tier + ' ' + TIERS[p.tier - 1].star);
   renderCard(); openPanel($('pcard'));
   const fresh = p.seals.filter(s => !seenSeals.includes(s));
   if (fresh.length) {
@@ -770,6 +821,7 @@ function openBook(tier?: number, sel?: number) {
 }
 function renderBook(anim = false) {
   stage.setLamp(TIERS[bookTier - 1].lamp); sound.setPitch(bookTier - 1);
+  void goWorld(TIER_WORLD[bookTier - 1], false);
   const total = solvedCount();
   const tiers = TIERS.map((T, i) => {
     const t = i + 1, open = tierOpen(t);
@@ -780,7 +832,7 @@ function renderBook(anim = false) {
   const ps = PUZZLES.filter(p => p.tier === bookTier), open = tierOpen(bookTier);
   const cells = ps.map(p => {
     const r = book[p.id], torn = isTorn(p.id);
-    return '<button class="cell' + (r?.solved ? ' done' : '') + (torn ? ' torn' : '') + (p.id === bookSel ? ' sel' : '') + (open ? '' : ' locked') + '" data-p="' + p.id + '"' + (r?.img ? ' style="background-image:url(' + r.img + ')"' : '') + '><span class="no">' + p.id + '</span>'
+    return '<button class="cell' + (r?.solved ? ' done' : '') + (torn ? ' torn' : '') + (p.id === bookSel ? ' sel' : '') + (open ? '' : ' locked') + '" data-p="' + p.id + '"' + (r?.img ? ' style="background-image:url(' + r.img + ')"' : '') + '><span class="no">No. ' + pad(p.id) + '</span>'
       + '<span class="st">' + (r?.solved ? '<span class="seal">解</span>' : torn ? '<span class="seal">破</span>' : '') + '</span></button>';
   }).join('');
   const sp = PUZZLES.find(p => p.id === bookSel)!, r = book[sp.id];
