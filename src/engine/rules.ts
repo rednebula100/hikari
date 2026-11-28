@@ -15,6 +15,8 @@ export interface Pos {
   ep: number // en-passant target square or -1
   half: number
   full: number
+  /** 衝 collapse: how many outer rings have fallen away (0 = full board) */
+  fallen?: number
 }
 export type Flag = 'n' | 'c' | 'e' | 'k' | 'q' | 'd'
 /** `via`: the edge square where a bishop's cushion shot reflects (衝 only). */
@@ -34,6 +36,8 @@ export interface Outcome {
   move: Move
   removed: Piece[]
   stomp?: { square: number; victim: Piece }
+  /** collapse: rings that fell during this move and what fell with them */
+  collapse?: { ring: number; gone: { id: string; sq: number }[] }[]
   /** a knight's landing shockwave: who was pushed where (null = off the board) */
   shock?: { id: string; from: number; to: number | null }[]
   clash?: Clash
@@ -53,6 +57,16 @@ export const file = (sq: number) => sq & 7
 export const rank = (sq: number) => sq >> 3
 export const sq = (f: number, r: number) => r * 8 + f
 export const on = (f: number, r: number) => f >= 0 && f < 8 && r >= 0 && r < 8
+/** Ring index of a square: 0 = outer edge … 3 = the central 2×2. */
+export const ringOf = (s: number) => Math.min(s & 7, 7 - (s & 7), s >> 3, 7 - (s >> 3))
+/** 衝 collapse schedule (full-move numbers at which rings 0, 1, 2 fall). The central 4 squares never fall. */
+export const COLLAPSE = [30, 44, 58]
+/** Plies until the next ring falls (Infinity when none is due). */
+export function pliesToCollapse(p: Pos): number {
+  const next = COLLAPSE[p.fallen ?? 0]
+  if (next === undefined) return Infinity
+  return (next - p.full) * 2 - (p.turn === 'b' ? 1 : 0)
+}
 export const cheb = (a: number, b: number) => Math.max(Math.abs(file(a) - file(b)), Math.abs(rank(a) - rank(b)))
 export const name = (s: number) => 'abcdefgh'[file(s)] + (rank(s) + 1)
 export const parse = (s: string) => sq(s.charCodeAt(0) - 97, Number(s[1]) - 1)
@@ -65,7 +79,8 @@ const B_DIRS = [[1, 1], [1, -1], [-1, 1], [-1, -1]]
 
 // ── FEN ──────────────────────────────────────────────────────────────────
 export function fromFen(fen: string): Pos {
-  const [placement, turn, cast, ep, half, full] = fen.trim().split(/\s+/)
+  const tokens = fen.trim().split(/\s+/), tilde = tokens.find(t => t.startsWith('~'))
+  const [placement, turn, cast, ep, half, full] = tokens.filter(t => !t.startsWith('~'))
   const board: (Piece | null)[] = Array(64).fill(null)
   placement.split('/').forEach((row, i) => {
     let f = 0
@@ -80,7 +95,7 @@ export function fromFen(fen: string): Pos {
   })
   const c = cast ?? '-'
   return { board, turn: (turn ?? 'w') as Side, castling: { K: c.includes('K'), Q: c.includes('Q'), k: c.includes('k'), q: c.includes('q') },
-    ep: ep && ep !== '-' ? parse(ep) : -1, half: Number(half ?? 0), full: Number(full ?? 1) }
+    ep: ep && ep !== '-' ? parse(ep) : -1, half: Number(half ?? 0), full: Number(full ?? 1), ...(tilde ? { fallen: Number(tilde.slice(1)) } : {}) }
 }
 export function toFen(p: Pos, counters = true): string {
   const rows: string[] = []
@@ -98,7 +113,8 @@ export function toFen(p: Pos, counters = true): string {
   // like chess.js / FEN practice: print the e.p. square only when an e.p. capture is legal
   const epOk = p.ep >= 0 && legal(p, 'classic').some(m => m.flag === 'e')
   const base = rows.join('/') + ' ' + p.turn + ' ' + c + ' ' + (epOk ? name(p.ep) : '-')
-  return counters ? base + ' ' + p.half + ' ' + p.full : base
+  const tail = p.fallen ? ' ~' + p.fallen : ''
+  return (counters ? base + ' ' + p.half + ' ' + p.full : base) + tail
 }
 export const clone = (p: Pos): Pos => ({ ...p, board: p.board.slice(), castling: { ...p.castling } })
 export const kingSq = (p: Pos, s: Side) => p.board.findIndex(x => x?.side === s && x.kind === 'k')
@@ -126,6 +142,8 @@ export function attacked(p: Pos, target: number, by: Side): boolean {
 // ── pseudo-legal moves (orthodox patterns) ───────────────────────────────
 export function pseudo(p: Pos, mode: Mode = 'classic'): Move[] {
   const clash = mode === 'clash'
+  const lo = clash ? p.fallen ?? 0 : 0, hi = 7 - lo
+  const on = (f: number, r: number) => f >= lo && f <= hi && r >= lo && r <= hi
   const out: Move[] = [], b = p.board, me = p.turn
   for (let s = 0; s < 64; s++) {
     const x = b[s]; if (!x || x.side !== me) continue
@@ -178,7 +196,7 @@ export function pseudo(p: Pos, mode: Mode = 'classic'): Move[] {
       }
       // 衝 cushion: a bishop that reaches the rim along an open diagonal may reflect once (never in a corner)
       for (const [via, a0, c0] of edges) {
-        const fu = file(via) + a0, rw = rank(via) + c0, offF = fu < 0 || fu > 7, offR = rw < 0 || rw > 7
+        const fu = file(via) + a0, rw = rank(via) + c0, offF = fu < lo || fu > hi, offR = rw < lo || rw > hi
         if (offF && offR) continue
         const a = offF ? -a0 : a0, c = offR ? -c0 : c0
         for (let u = file(via) + a, w = rank(via) + c; on(u, w); u += a, w += c) {
@@ -202,7 +220,8 @@ function revoke(p: Pos, square: number, piece: Piece | null) {
 }
 
 /** The board squares of the full line through `to` along the step (df, dr). */
-export function lineThrough(to: number, df: number, dr: number): number[] {
+export function lineThrough(to: number, df: number, dr: number, fallen = 0): number[] {
+  const on = (f: number, r: number) => f >= fallen && f <= 7 - fallen && r >= fallen && r <= 7 - fallen
   let f = file(to), r = rank(to)
   while (on(f - df, r - dr)) { f -= df; r -= dr }
   const out: number[] = []
@@ -211,6 +230,8 @@ export function lineThrough(to: number, df: number, dr: number): number[] {
 }
 
 export function make(p0: Pos, m: Move, mode: Mode, opts: { newton?: boolean } = {}): { pos: Pos; out: Outcome } {
+  const lo = mode === 'clash' ? p0.fallen ?? 0 : 0
+  const on = (f: number, r: number) => f >= lo && f <= 7 - lo && r >= lo && r <= 7 - lo
   const p = clone(p0), b = p.board, me = p.turn
   const mover = b[m.from]!
   const out: Outcome = { move: m, removed: [] }
@@ -233,7 +254,7 @@ export function make(p0: Pos, m: Move, mode: Mode, opts: { newton?: boolean } = 
   } else if (m.flag === 'c') {
     // 衝: relativistic collision along the move's line
     const [df, dr] = moveDir(m)
-    const line = lineThrough(m.to, df, dr)
+    const line = lineThrough(m.to, df, dr, p.fallen ?? 0)
     const idx = (s: number) => line.indexOf(s)
     const run = m.via !== undefined ? cheb(m.from, m.via) + cheb(m.via, m.to) : cheb(m.from, m.to), speed = opts.newton ? runSpeedNewton(run) : runSpeed(run)
     b[m.from] = null
@@ -284,6 +305,17 @@ export function make(p0: Pos, m: Move, mode: Mode, opts: { newton?: boolean } = 
   }
   p.half = reset ? 0 : p.half + 1
   if (me === 'b') p.full++
+  // 衝 collapse: when the clock reaches the schedule, the outer ring cracks away with everything on it
+  if (mode === 'clash') {
+    const due = COLLAPSE.filter(n => p.full >= n).length
+    while ((p.fallen ?? 0) < due) {
+      const k = p.fallen ?? 0, gone: { id: string; sq: number }[] = []
+      for (let s2 = 0; s2 < 64; s2++) if (ringOf(s2) === k && b[s2]) { out.removed.push(b[s2]!); gone.push({ id: b[s2]!.id, sq: s2 }); revoke(p, s2, b[s2]); b[s2] = null }
+      p.fallen = k + 1; (out.collapse ??= []).push({ ring: k, gone })
+      if (gone.length) p.half = 0
+      if (p.ep >= 0 && ringOf(p.ep) <= k) p.ep = -1
+    }
+  }
   p.turn = other(me)
   return { pos: p, out }
 }
@@ -301,7 +333,7 @@ export function kingThreatened(p: Pos, side: Side, mode: Mode): boolean {
     if (m.kind === 'n') { if (m.to === k) return true; continue }
     // only collisions whose line passes through the king can move it
     const [df, dr] = moveDir(m)
-    if (!lineThrough(m.to, df, dr).includes(k)) continue
+    if (!lineThrough(m.to, df, dr, p.fallen ?? 0).includes(k)) continue
     const r = make(q, m, mode)
     if (kingSq(r.pos, side) < 0) return true
   }
@@ -318,10 +350,14 @@ export function legal(p: Pos, mode: Mode): Move[] {
 }
 export const inCheck = (p: Pos, mode: Mode) => kingThreatened(p, p.turn, mode)
 
-export type Status = { over: false } | { over: true; result: '1-0' | '0-1' | '1/2-1/2'; reason: 'checkmate' | 'stalemate' | 'fifty' | 'repetition' | 'material' }
+export type Status = { over: false } | { over: true; result: '1-0' | '0-1' | '1/2-1/2'; reason: 'checkmate' | 'stalemate' | 'fifty' | 'repetition' | 'material' | 'collapse' }
 export function status(p: Pos, mode: Mode, history: readonly string[] = []): Status {
+  const wk = kingSq(p, 'w') >= 0, bk = kingSq(p, 'b') >= 0
+  if (!wk || !bk) return { over: true, result: !wk && !bk ? '1/2-1/2' : wk ? '1-0' : '0-1', reason: 'collapse' }
   if (!legal(p, mode).length) {
     if (inCheck(p, mode)) return { over: true, result: p.turn === 'w' ? '0-1' : '1-0', reason: 'checkmate' }
+    // 衝: a king that cannot move anywhere without falling has been cornered — it loses (draughts-style)
+    if (mode === 'clash') return { over: true, result: p.turn === 'w' ? '0-1' : '1-0', reason: 'stalemate' }
     return { over: true, result: '1/2-1/2', reason: 'stalemate' }
   }
   if (p.half >= 100) return { over: true, result: '1/2-1/2', reason: 'fifty' }
@@ -330,7 +366,7 @@ export function status(p: Pos, mode: Mode, history: readonly string[] = []): Sta
   if (mode === 'classic') {
     const rest = p.board.filter(x => x && x.kind !== 'k') as Piece[]
     if (!rest.length || (rest.length === 1 && (rest[0].kind === 'n' || rest[0].kind === 'b'))) return { over: true, result: '1/2-1/2', reason: 'material' }
-  } else if (p.board.filter(x => x).length === 2) return { over: true, result: '1/2-1/2', reason: 'material' }
+  }
   return { over: false }
 }
 

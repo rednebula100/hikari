@@ -1,7 +1,7 @@
 import './style.css';
 import { Stage, X, Z, type Quality } from '../render/stage';
 import { sketch } from '../render/aim';
-import { fromFen, toFen, legal, make, status, inCheck, kingSq, pseudo, other, name, parse, START, file, rank, cheb, MASS, type Pos, type Move, type Mode, type Kind, type Side, type Outcome } from '../engine/rules';
+import { fromFen, toFen, legal, make, status, inCheck, kingSq, pseudo, other, name, parse, START, file, rank, cheb, MASS, pliesToCollapse, type Pos, type Move, type Mode, type Kind, type Side, type Outcome } from '../engine/rules';
 import { choose, rng, LEVEL_NAME, type Level } from '../engine/ai';
 import { EXPERIMENTS } from '../engine/lessons';
 import { sightings, belief, intentions, resolve, apply } from '../engine/fog';
@@ -11,7 +11,9 @@ import { store, loadSettings, saveSettings, loadBook, saveBook, loadCodex, saveC
 import { gsap, toast, reveal, openPanel, stamp, discovery, scramble, riders } from './fx';
 import { Loader } from './loader';
 import { WORLDS, TIER_WORLD, type WorldId } from '../render/worlds';
-import { DEFAULT_LOOK, NAMES, type Look } from '../render/looks';
+import { DEFAULT_LOOK, NAMES, PART_NAMES, FACTORY, type Look, type Part, type MatSpec } from '../render/looks';
+import { colorPicker } from './picker';
+import { configured as netConfigured, connect as netConnect, disconnect as netDisconnect, onNet, netState, type NetState } from '../online/net';
 import { intro } from './intro';
 import { ENTRIES, GROUPS, RARITY, byId, detect, newTally, type GameTally } from '../content/codex';
 import { targetMoves, targetStep, emptyTally, addTally, achieved, findMove, mated, defend, uci, type Puzzle, type Seal, type Tally } from '../content/puzzle';
@@ -55,12 +57,20 @@ const jobs = new Map<number, (m: Move | null) => void>();
 try {
   worker = new Worker(new URL('../engine/ai.worker.ts', import.meta.url), { type: 'module' });
   worker.onmessage = (e: MessageEvent<{ id: number; move: Move | null }>) => { jobs.get(e.data.id)?.(e.data.move); jobs.delete(e.data.id); };
-  worker.onerror = () => { worker = null; };
+  // a worker that fails must never leave the game waiting: pending jobs fall back to the main thread
+  worker.onerror = () => { worker = null; for (const [, j] of jobs) j(undefined as unknown as Move | null); jobs.clear(); };
 } catch { worker = null; }
 function think(p: Pos, m: Mode, lvl: Level, hist: string[]): Promise<Move | null> {
   const seed = Math.floor(random() * 2 ** 31);
-  if (!worker) return Promise.resolve(choose(p, m, lvl, rng(seed), hist));
-  return new Promise(res => { const id = ++jobId; jobs.set(id, res); worker!.postMessage({ id, pos: p, mode: m, level: lvl, seed, history: hist }); });
+  const local = () => choose(p, m, lvl, rng(seed), hist);
+  if (!worker) return Promise.resolve(local());
+  return new Promise(res => {
+    const id = ++jobId;
+    const done = (mv: Move | null | undefined) => { clearTimeout(timer); jobs.delete(id); res(mv === undefined ? local() : mv); };
+    const timer = setTimeout(() => done(undefined), 12000);
+    jobs.set(id, done as (m: Move | null) => void);
+    try { worker!.postMessage({ id, pos: p, mode: m, level: lvl, seed, history: hist }); } catch { done(undefined); }
+  });
 }
 
 // ── state ────────────────────────────────────────────────────────────────
@@ -90,7 +100,17 @@ let tally: GameTally = newTally();
 let lastOut: Outcome | null = null;
 const tutorialDone = () => store.get('tutorial') === '1';
 
+/** The collapse clock: cracks on the doomed ring and a countdown in the status label. */
+function collapseNote(): string {
+  if (mode !== 'clash' || screen !== 'play') { stage.warnCollapse(0, 0); return ''; }
+  const n = pliesToCollapse(pos);
+  if (!isFinite(n)) { stage.warnCollapse(0, 0); return ''; }
+  const moves = Math.ceil(n / 2);
+  stage.warnCollapse(pos.fallen ?? 0, n <= 8 ? 1 - (n - 1) / 8 : 0);
+  return moves <= 8 ? ' · 붕괴까지 ' + moves + '수' : '';
+}
 function setStatus(text: string, danger = false, label = '') {
+  label += collapseNote();
   $('status-t').textContent = text; $('status-l').textContent = label; $('status').classList.toggle('danger', danger);
 }
 function clearScreen() { $('screen').innerHTML = ''; $('screen').className = ''; }
@@ -125,6 +145,16 @@ async function goWorld(id: WorldId, establish = true, note = '') {
   if (stage.world !== id) {
     await new Promise<void>(r => { gsap.to(fade, { opacity: 1, duration: .45, ease: 'power2.in', overwrite: true, onComplete: () => r() }); setTimeout(r, 700); });
     if (token !== worldToken) return;
+    if (stage.needsPrepare(id)) {
+      // world loading screen: the name of the place in the dark and a thin brass rail
+      const W = WORLDS.find(w => w.id === id)!, el = $('wload');
+      el.innerHTML = '<span class="t">' + W.name + '</span><span class="s">' + W.sub + '</span><div class="bar"><i></i></div>';
+      el.hidden = false; gsap.fromTo(el, { opacity: 0 }, { opacity: 1, duration: .4 });
+      const bar = el.querySelector('i') as HTMLElement;
+      await stage.prepareWorld(id, f => { bar.style.width = Math.round(f * 100) + '%'; });
+      await new Promise<void>(r => gsap.to(el, { opacity: 0, duration: .35, onComplete: () => { el.hidden = true; r(); } }));
+      if (token !== worldToken) return;
+    }
     stage.setWorld(id);
   }
   if (establish && id !== 'lab') stage.establish();
@@ -139,7 +169,8 @@ async function goWorld(id: WorldId, establish = true, note = '') {
 }
 let lastRandom: WorldId = 'lab';
 function randomWorld(): WorldId {
-  const pool = WORLDS.map(w => w.id).filter(w => w !== lastRandom);
+  // matches visit the lower worlds only; the high ones are earned in the problem book
+  const pool = (['lab', 'sea', 'clouds'] as WorldId[]).filter(w => w !== lastRandom);
   return (lastRandom = pool[Math.floor(Math.random() * pool.length)]);
 }
 
@@ -183,7 +214,7 @@ async function title(instant: boolean) {
   stage.writeBlackboard([]); board = []; stage.setLamp(2700); sound.setPitch(0);
   if (stage.world !== 'lab') void goWorld('lab', false);
   const demo = fromFen(DEMO);
-  stage.sync(demo); stage.flickMode = true; stage.resetCamera(); stage.aimZ = -.6; stage.aimX = innerWidth > innerHeight * 1.1 ? 2.4 : 0;
+  stage.sync(demo); stage.flickMode = true; stage.camLocked = true; stage.resetCamera(); stage.aimZ = -.6; stage.aimX = innerWidth > innerHeight * 1.1 ? 2.4 : 0;
   clearScreen();
   const skip = () => { if (token === titleToken) { titleToken++; showTitleMenu(true); stage.lampFlicker(true); } };
   $('screen').onclick = skip;
@@ -213,15 +244,17 @@ function showTitleMenu(instant: boolean) {
     + row('t-codex', '03', '현상 도감', found + ' / ' + ENTRIES.length + ' 발견')
     + row('t-tut', '04', '실험 노트', tutorialDone() ? '다시 보기' : '처음이라면')
     + row('t-look', '05', '꾸미기', NAMES.pieces[look.pieces])
-    + row('t-set', '06', '설정', '')
+    + row('t-online', '06', '온라인', netConfigured() ? '랭킹전 준비 중' : '서버 미설정')
+    + row('t-set', '07', '설정', '')
     + '</div></div>'
-    + '<div class="foot l"><span class="lbl">Red Nebula · v0.7</span></div><div class="foot r"><button id="t-sound">' + (sound.muted ? '소리 켜기' : '소리 끄기') + '</button><button id="t-credits">크레딧</button></div>';
+    + '<div class="foot l"><span class="lbl">Red Nebula · v0.8</span></div><div class="foot r"><button id="t-sound">' + (sound.muted ? '소리 켜기' : '소리 끄기') + '</button><button id="t-credits">크레딧</button></div>';
   $('t-start').onclick = () => { sound.unlock(); if (tutorialDone()) matchSetup(); else { toast('처음이군요 — 실험 노트부터 펼칩니다'); controls(); } };
   $('t-book').onclick = () => { sound.unlock(); openBook(); };
   $('t-codex').onclick = () => { sound.unlock(); openCodex(); };
   $('t-tut').onclick = () => { sound.unlock(); controls(); };
   $('t-set').onclick = () => openSettings(() => showTitleMenu(true));
   $('t-look').onclick = openLook;
+  $('t-online').onclick = () => { sound.unlock(); openOnline(); };
   $('t-sound').onclick = () => { settings.muted = !settings.muted; sound.setMuted(settings.muted); saveSettings(settings); showTitleMenu(true); };
   $('t-credits').onclick = credits;
   $('t-mark').onclick = e => { e.stopPropagation(); spin($('t-mark'), $('t-mark')); };
@@ -248,8 +281,9 @@ function credits() {
     + '<p><b>제작</b> — Red Nebula</p>'
     + '<p><b>체스 세트</b> — "A Beautiful Game", © 2020 ASWF (MaterialX Project), glTF 변환 © 2022 Ed Mackey. <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>, <a href="https://github.com/KhronosGroup/glTF-Sample-Assets" target="_blank" rel="noopener">Khronos glTF Sample Assets</a>.</p>'
     + '<p><b>서체</b> — Hahmlet · Nanum Pen Script (SIL OFL 1.1).</p>'
+    + '<p><b>범선</b> — Poly Haven 「Ship Pinnace」 (CC0).</p>'
     + '<p><b>바다·구름</b> — FFT 바다: dli/waves © David Li (MIT) 이식 · 볼류메트릭 구름·대기: takram three-geospatial (MIT) · postprocessing (Zlib).</p>'
-    + '<p><b>라이브러리</b> — three.js (MIT), Rapier 물리 (Apache-2.0), GSAP (GreenSock 표준 라이선스, 무료), Draco & Basis Universal 디코더 (Apache-2.0). 규칙 검증 — chess.js (BSD-2).</p>'
+    + '<p><b>라이브러리</b> — three.js (MIT), Rapier 물리 (Apache-2.0), GSAP (GreenSock 표준 라이선스, 무료), Draco & Basis Universal 디코더 (Apache-2.0). 온라인 — Colyseus (MIT). 규칙 검증 — chess.js (BSD-2).</p>'
     + '<p><b>소리</b> — 전부 실시간 합성.</p></div><div class="acts"><button class="btn" id="c-back">돌아가기 <span class="k">Esc</span></button></div></div></div>';
   openPanel($('screen').firstElementChild!);
   $('c-back').onclick = back;
@@ -284,7 +318,7 @@ $('logo').onclick = () => spin($('logo-spin'), $('logo'));
 
 // ── a game ───────────────────────────────────────────────────────────────
 function resetBoard(fen: string) {
-  titleToken++; stage.flickMode = false;
+  titleToken++; stage.flickMode = false; stage.camLocked = false;
   pos = fromFen(fen); truth = pos; hist = [pos]; outs = []; tally = newTally();
   stage.showStale(new Map()); history = []; moveNo = 0; selected = -1; busy = false;
   stage.chalk.clearNow(); stage.clearStrobe(); stage.sync(pos);
@@ -361,10 +395,12 @@ function drawSelection() {
     let r: ReturnType<typeof make> | null = null;
     try { r = puz?.goal.type !== 'mate' && screen === 'puzzle' ? targetStep(pos, m, newton) : make(pos, m, 'clash', { newton }); } catch { r = null; }
     const cl = r?.out.clash, p = cl ? momentum(MASS[m.kind], cl.speed) : 0;
-    const radius = .18 + .24 * Math.min(1, p / pMax);
+    // impulse is read as how much of the ring is drawn (full ring = a queen's seven-square charge)
+    const radius = .36, sweep = .14 + .86 * Math.min(1, p / pMax);
     const foes = r ? r.out.removed.filter(x => x.side === pos.turn ? false : true).length : 0, mine = r ? r.out.removed.filter(x => x.side === pos.turn).length : 0;
     const color = !reveal ? '#ffc98a' : mine ? '#9fc4ff' : foes ? '#ff8f7a' : '#ffc98a';
-    c.circle(at, radius, { dur: 100, alpha: .85, color });
+    c.circle(at, radius, { dur: 0, alpha: .18, color, width: .03 });
+    c.circle(at, radius, { dur: 140, alpha: .92, color, sweep, start: -Math.PI / 2 });
     if (reveal) for (let i = 0; i < foes; i++) {
       const ang = -Math.PI / 2 + (i - (foes - 1) / 2) * .5, r0 = radius + .05, r1 = radius + .17;
       c.path([[at[0] + Math.cos(ang) * r0, at[1] + Math.sin(ang) * r0], [at[0] + Math.cos(ang) * r1, at[1] + Math.sin(ang) * r1]], { dur: 60, delay: 80, color, alpha: .9, width: .05 });
@@ -436,11 +472,13 @@ async function onSquare(sq: number, button: number) {
   await commit(m);
 }
 let hintedConfirm = false;
+let cancelPromotion: (() => void) | null = null;
 function promotion(ms: Move[]): Promise<Move | null> {
   return new Promise(res => {
+    cancelPromotion = () => { cancelPromotion = null; clearScreen(); res(null); };
     $('screen').className = 'dim';
     $('screen').innerHTML = '<div class="panel dlg"><div class="ph"><span class="lbl">승진</span></div><div class="pb"><h2>무엇이 될까</h2><div class="promo">' + (['q', 'r', 'b', 'n'] as Kind[]).map(k => '<button data-k="' + k + '">' + GLYPH.w[k] + '</button>').join('') + '</div></div></div>';
-    document.querySelectorAll<HTMLButtonElement>('[data-k]').forEach(b => b.onclick = () => { clearScreen(); res(ms.find(m => m.promo === b.dataset.k) ?? null); });
+    document.querySelectorAll<HTMLButtonElement>('[data-k]').forEach(b => b.onclick = e => { e.stopPropagation(); cancelPromotion = null; clearScreen(); res(ms.find(m => m.promo === b.dataset.k) ?? ms[0]); });
   });
 }
 
@@ -470,7 +508,7 @@ function record(before: Pos, out: Outcome) {
 
 async function commit(m: Move) {
   busy = true; selected = -1;
-  stage.chalk.erase(200); sound.chalk(180);
+  stage.chalk.remove('hover'); stage.chalk.remove('target'); sound.chalk(180); // the preview stays until contact
   if (variant === 'light' && screen === 'play') return lightTurn(m);
   await play(m);
   if (screen === 'lesson') { busy = false; return explain(); }
@@ -594,7 +632,7 @@ async function finished(): Promise<boolean> {
   if (st.reason === 'checkmate' && mode === 'clash') await finale();
   else await wait(600);
   const win = st.result === '1-0', draw = st.result === '1/2-1/2';
-  const why = { checkmate: '체크메이트', stalemate: '스테일메이트', fifty: '50수 규칙', repetition: '3회 반복', material: '기물 부족' }[st.reason];
+  const why = { checkmate: '체크메이트', stalemate: mode === 'clash' ? '궁지 — 어디로 가도 떨어진다' : '스테일메이트', fifty: '50수 규칙', repetition: '3회 반복', material: '기물 부족', collapse: '킹이 무너진 판과 함께 떨어졌다' }[st.reason];
   resultPanel(win, draw, why);
   return true;
 }
@@ -871,11 +909,12 @@ function renderBook(anim = false) {
   const tiers = TIERS.map((T, i) => {
     const t = i + 1, open = tierOpen(t);
     const n = tierSolved(t);
-    return '<button class="tier' + (t === bookTier ? ' sel' : '') + (open ? '' : ' locked') + '" data-t="' + t + '" style="--tc:' + T.color + '"><span class="sw"></span><span class="nm">★' + t + ' ' + T.star + '<small>' + T.cls + '형 ' + T.k.toLocaleString() + 'K</small></span>'
+    if (!open) return '<button class="tier locked" data-t="' + t + '" style="--tc:#3a3128"><span class="sw"></span><span class="nm">???<small>잠긴 단계</small></span><span class="pr"></span></button>';
+    return '<button class="tier' + (t === bookTier ? ' sel' : '') + '" data-t="' + t + '" style="--tc:' + T.color + '"><span class="sw"></span><span class="nm">★' + t + ' ' + T.star + '<small>' + T.cls + '형 ' + T.k.toLocaleString() + 'K</small></span>'
       + '<span class="pr" title="' + n + '/10">' + Array.from({ length: 10 }, (_, i) => '<i class="' + (i < n ? 'on' : '') + '"></i>').join('') + '</span></button>';
   }).join('');
   const ps = PUZZLES.filter(p => p.tier === bookTier), open = tierOpen(bookTier);
-  const cells = ps.map(p => {
+  const cells = !open ? ps.map(() => '<div class="cell lockedq">?</div>').join('') : ps.map(p => {
     const r = book[p.id], torn = isTorn(p.id);
     return '<button class="cell' + (r?.solved ? ' done' : '') + (torn ? ' torn' : '') + (p.id === bookSel ? ' sel' : '') + (open ? '' : ' locked') + '" data-p="' + p.id + '"' + (r?.img ? ' style="background-image:url(' + r.img + ')"' : '') + '><span class="no">No. ' + pad(p.id) + '</span>'
       + '<span class="st">' + (r?.solved ? '<span class="seal">解</span>' : torn ? '<span class="seal">破</span>' : '') + '</span></button>';
@@ -886,13 +925,14 @@ function renderBook(anim = false) {
   $('screen').className = 'dim left';
   $('screen').innerHTML = '<div class="panel shell"><div class="ph"><span class="lbl">당구 문제</span><span class="lbl">' + total + ' / ' + PUZZLES.length + ' 풀이</span></div><div class="pb">'
     + '<div class="tiers">' + tiers + '</div><div class="grid">'
-    + '<div style="display:flex;justify-content:space-between;align-items:end;gap:20px"><div><h2>' + TIERS[bookTier - 1].star + '</h2><div style="margin-top:6px">' + stars(bookTier) + '</div></div>'
-    + '<div class="sealkey">' + (introSeals.length ? introSeals.map(s => '<span class="seal">' + s + '</span><span>' + SEAL_TEXT[s] + '</span>').join('') : '<span></span><span>조준 판서가 결과를 전부 보여 준다</span>') + '</div></div>'
-    + (open ? '' : '<p class="sub">앞 단계에서 7문제를 풀면 열린다.</p>')
+    + (open ? '<div style="display:flex;justify-content:space-between;align-items:end;gap:20px"><div><h2>' + TIERS[bookTier - 1].star + '</h2><div style="margin-top:6px">' + stars(bookTier) + '</div></div>'
+      + '<div class="sealkey">' + (introSeals.length ? introSeals.map(s => '<span class="seal">' + s + '</span><span>' + SEAL_TEXT[s] + '</span>').join('') : '<span></span><span>조준 판서가 결과를 전부 보여 준다</span>') + '</div></div>'
+      : '<div><h2>잠긴 단계</h2><p class="sub">앞 단계에서 7문제를 풀면 이 별이 모습을 드러낸다.</p></div>')
     + '<div class="cells">' + cells + '</div>'
-    + '<div class="detail"><div><span class="lbl">No. ' + pad(sp.id) + (sp.title ? ' · ' + sp.title : '') + '</span><div class="goal" style="margin-top:6px">' + goalText(sp) + '</div><div class="seals">' + seals + '</div>'
+    + (!open ? '' : '<div class="detail"><div><span class="lbl">No. ' + pad(sp.id) + (sp.title ? ' · ' + sp.title : '') + '</span><div class="goal" style="margin-top:6px">' + goalText(sp) + '</div><div class="seals">' + seals + '</div>'
     + '<div class="facts"><div><span class="lbl">' + (sp.goal.type === 'mate' ? '첫 수 후보' : '가능한 수순') + '</span><b>' + sp.total.toLocaleString() + '</b></div><div><span class="lbl">' + (sp.goal.type === 'mate' ? '강제 메이트' : '해답') + '</span><b>' + (r?.solved ? sp.solutions : '?') + '</b></div><div><span class="lbl">시도</span><b>' + (r?.tries ?? 0) + '</b></div><div><span class="lbl">난도</span><b>' + sp.score.toFixed(1) + '</b></div></div></div>'
-    + '<div class="go" style="display:flex;flex-direction:column;gap:8px"><button class="btn main" id="b-go"' + (open && !isTorn(sp.id) ? '' : ' disabled') + '>' + (isTorn(sp.id) ? '내일 다시' : r?.solved ? '다시 풀기' : '풀기') + ' <span class="k">ENTER</span></button><button class="btn" id="b-back">돌아가기 <span class="k">ESC</span></button></div></div>'
+    + '<div class="go" style="display:flex;flex-direction:column;gap:8px"><button class="btn main" id="b-go"' + (open && !isTorn(sp.id) ? '' : ' disabled') + '>' + (isTorn(sp.id) ? '내일 다시' : r?.solved ? '다시 풀기' : '풀기') + ' <span class="k">ENTER</span></button><button class="btn" id="b-back">돌아가기 <span class="k">ESC</span></button></div></div>')
+    + (open ? '' : '<div class="detail" style="grid-template-columns:1fr auto"><div></div><div class="go"><button class="btn" id="b-back">돌아가기 <span class="k">ESC</span></button></div></div>')
     + '</div></div></div>';
   if (anim) { openPanel($('screen').firstElementChild!); gsap.fromTo('.cell', { opacity: 0, y: 6 }, { opacity: 1, y: 0, duration: .25, stagger: .02, ease: 'expo.out', clearProps: 'transform' }); }
   document.querySelectorAll<HTMLButtonElement>('[data-t]').forEach(b => b.onclick = () => { bookTier = Number(b.dataset.t); bookSel = PUZZLES.find(p => p.tier === bookTier && !book[p.id]?.solved)?.id ?? PUZZLES.find(p => p.tier === bookTier)!.id; sound.tick(); renderBook(true); });
@@ -900,7 +940,7 @@ function renderBook(anim = false) {
     b.onclick = () => { const id = Number(b.dataset.p); if (id === bookSel && tierOpen(bookTier)) void openPuzzle(PUZZLES.find(p => p.id === id)!); else { bookSel = id; sound.tick(); renderBook(); } };
     b.onpointerenter = () => sound.hover();
   });
-  $('b-go').onclick = () => void openPuzzle(sp);
+  document.getElementById('b-go')?.addEventListener('click', () => void openPuzzle(sp));
   $('b-back').onclick = () => title(true);
 }
 
@@ -941,24 +981,103 @@ function renderCodex(anim = false) {
 
 // ── 꾸미기 ───────────────────────────────────────────────────────────────
 const look: Look = (() => { try { return { ...DEFAULT_LOOK, ...JSON.parse(store.get('v1:look') || '{}') }; } catch { return { ...DEFAULT_LOOK }; } })();
+let lookPart: Part = 'wp';
+type Preset = { name: string; look: Look };
+const presets = (): Preset[] => { try { return JSON.parse(store.get('v1:presets') || '[]'); } catch { return []; } };
+const savePresets = (list: Preset[]) => store.set('v1:presets', JSON.stringify(list));
+const esc = (t: string) => t.replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';');
+function applyLook(next: Look) {
+  look.pieces = next.pieces; look.board = next.board; look.table = next.table;
+  look.custom = next.custom ? JSON.parse(JSON.stringify(next.custom)) : undefined;
+  store.set('v1:look', JSON.stringify(look));
+  stage.setLook(look); stage.sync(screen === 'title' ? fromFen(DEMO) : pos); stage.flickMode = false;
+}
 function openLook() {
   stage.flickMode = false; stage.aimX = innerWidth > innerHeight * 1.1 ? -2.6 : 0;
-  const seg = (key: keyof Look) => '<div class="seg">' + Object.entries(NAMES[key]).map(([v, t]) => '<button data-look="' + key + '" data-v="' + v + '" class="' + (look[key] === v ? 'on' : '') + '">' + t + '</button>').join('') + '</div>';
+  const seg = (key: 'pieces' | 'board' | 'table') => '<div class="seg">' + Object.entries(NAMES[key]).map(([v, t]) => '<button data-look="' + key + '" data-v="' + v + '" class="' + (look[key] === v ? 'on' : '') + '">' + t + '</button>').join('') + '</div>';
   const first = !$('screen').classList.contains('side');
+  const spec = stage.partSpec(lookPart), edited = !!look.custom?.[lookPart];
+  const knob = (k: 'rough' | 'metal' | 'glass' | 'coat', label: string) => '<div class="cp-row mk" data-k="' + k + '"><span class="cp-l">' + label + '</span><button class="cp-step" data-d="-1" aria-label="' + label + ' 줄이기">−</button><input type="range" min="0" max="100" value="' + Math.round(spec[k] * 100) + '"><button class="cp-step" data-d="1" aria-label="' + label + ' 늘리기">+</button><output>' + Math.round(spec[k] * 100) + '</output></div>';
+  const mine = presets();
   $('screen').className = 'side';
   $('screen').innerHTML = '<div class="panel set lookp"><div class="ph"><span class="lbl">꾸미기</span></div><div class="pb">'
     + '<div class="line"><span class="lbl">기물</span>' + seg('pieces') + '</div>'
     + '<div class="line"><span class="lbl">보드</span>' + seg('board') + '</div>'
     + '<div class="line"><span class="lbl">테이블</span>' + seg('table') + '</div>'
+    + '<div class="lk-sec"><span class="lbl">세부 조정</span><div class="seg parts">' + (Object.keys(PART_NAMES) as Part[]).map(p => '<button data-part="' + p + '" class="' + (p === lookPart ? 'on' : '') + (look.custom?.[p] ? ' ed' : '') + '">' + PART_NAMES[p] + '</button>').join('') + '</div>'
+    + '<div id="lk-picker"></div>'
+    + '<div class="mats">' + knob('rough', '거칠기') + knob('metal', '금속') + knob('glass', '유리') + knob('coat', '코팅') + '</div>'
+    + '<div class="lk-acts"><button class="btn sm" id="lk-reset"' + (edited ? '' : ' disabled') + '>이 부분 원래대로</button><button class="btn sm" id="lk-resetall"' + (look.custom && Object.keys(look.custom).length ? '' : ' disabled') + '>세부 조정 모두 지우기</button></div></div>'
+    + '<div class="lk-sec"><span class="lbl">프리셋</span><div class="presets">'
+    + FACTORY.map((p, i) => '<button class="chip" data-fac="' + i + '">' + esc(p.name) + '</button>').join('')
+    + mine.map((p, i) => '<span class="chip mine"><button data-pre="' + i + '">' + esc(p.name) + '</button><button class="x" data-del="' + i + '" aria-label="' + esc(p.name) + ' 지우기">×</button></span>').join('')
+    + '</div><div class="psave"><input id="lk-name" maxlength="16" placeholder="지금 모습에 이름 붙이기"><button class="btn sm" id="lk-save">저장</button></div></div>'
     + '<div class="acts"><button class="btn" id="l-back">돌아가기 <span class="k">Esc</span></button></div></div></div>';
   if (first) openPanel($('screen').firstElementChild!);
+  const rerender = () => { const sc = $('screen').querySelector('.pb')?.scrollTop ?? 0; openLook(); const pb = $('screen').querySelector('.pb'); if (pb) pb.scrollTop = sc; };
   document.querySelectorAll<HTMLButtonElement>('[data-look]').forEach(b => b.onclick = () => {
-    (look as unknown as Record<string, string>)[b.dataset.look!] = b.dataset.v!;
-    store.set('v1:look', JSON.stringify(look)); sound.tick();
-    stage.setLook(look); stage.sync(screen === 'title' ? fromFen(DEMO) : pos); stage.flickMode = false;
-    openLook();
+    (look as unknown as Record<string, string>)[b.dataset.look!] = b.dataset.v!; sound.tick();
+    applyLook(look); rerender();
   });
+  document.querySelectorAll<HTMLButtonElement>('[data-part]').forEach(b => b.onclick = () => { lookPart = b.dataset.part as Part; sound.tick(); rerender(); });
+  // every edit writes the part's spec and retunes the live materials (no rebuild while dragging)
+  const cur: MatSpec = { ...spec };
+  let saveT = 0;
+  const commit = () => {
+    look.custom = { ...(look.custom ?? {}), [lookPart]: { ...cur } };
+    if (stage.tune(lookPart, { ...cur }, look)) stage.sync(screen === 'title' ? fromFen(DEMO) : pos);
+    clearTimeout(saveT); saveT = window.setTimeout(() => store.set('v1:look', JSON.stringify(look)), 250);
+    document.querySelector('[data-part="' + lookPart + '"]')?.classList.add('ed');
+    ($('lk-reset') as HTMLButtonElement).disabled = false; ($('lk-resetall') as HTMLButtonElement).disabled = false;
+  };
+  colorPicker($('lk-picker'), spec.color, spec.alpha, (hex, alpha) => { cur.color = hex; cur.alpha = alpha; commit(); });
+  document.querySelectorAll<HTMLElement>('.mats .mk').forEach(row => {
+    const k = row.dataset.k as 'rough' | 'metal' | 'glass' | 'coat', range = row.querySelector('input')!, out = row.querySelector('output')!;
+    const set = (v: number) => { v = Math.max(0, Math.min(100, Math.round(v))); range.value = String(v); out.textContent = String(v); cur[k] = v / 100; commit(); };
+    range.oninput = () => set(+range.value);
+    row.querySelectorAll<HTMLButtonElement>('.cp-step').forEach(b => b.onclick = () => set(+range.value + +b.dataset.d! * 5));
+  });
+  $('lk-reset').onclick = () => { if (look.custom) delete look.custom[lookPart]; applyLook(look); sound.tick(); rerender(); };
+  $('lk-resetall').onclick = () => { look.custom = undefined; applyLook(look); sound.tick(); rerender(); };
+  document.querySelectorAll<HTMLButtonElement>('[data-fac]').forEach(b => b.onclick = () => { applyLook(FACTORY[+b.dataset.fac!].look); sound.tick(); rerender(); });
+  document.querySelectorAll<HTMLButtonElement>('[data-pre]').forEach(b => b.onclick = () => { applyLook(presets()[+b.dataset.pre!].look); sound.tick(); rerender(); });
+  document.querySelectorAll<HTMLButtonElement>('[data-del]').forEach(b => b.onclick = () => { const l = presets(); l.splice(+b.dataset.del!, 1); savePresets(l); sound.tick(); rerender(); });
+  const save = () => {
+    const name = ($('lk-name') as HTMLInputElement).value.trim() || '프리셋 ' + (presets().length + 1);
+    const l = presets().filter(p => p.name !== name); l.push({ name, look: JSON.parse(JSON.stringify(look)) }); savePresets(l.slice(-12));
+    toast('「' + name + '」 저장됨'); sound.stamp(); rerender();
+  };
+  $('lk-save').onclick = save;
+  ($('lk-name') as HTMLInputElement).onkeydown = e => { e.stopPropagation(); if (e.key === 'Enter') save(); };
   $('l-back').onclick = () => { stage.aimX = innerWidth > innerHeight * 1.1 ? 2.4 : 0; showTitleMenu(true); stage.flickMode = true; };
+}
+
+// ── online (groundwork): wake the server, show presence and latency; ranked play comes later ──
+let netOff: (() => void) | null = null;
+function openOnline() {
+  $('screen').className = 'dim';
+  $('screen').innerHTML = '<div class="panel dlg online"><div class="ph"><span class="lbl">온라인</span></div><div class="pb">'
+    + '<div class="net" id="net"></div>'
+    + '<div class="ranked"><div class="rk-h"><b>랭킹전</b><span class="tag">준비 중</span></div>'
+    + '<p>서버가 판정하는 衝 대국. 체스 시계 — <b>3+2</b> · <b>5+3</b> · <b>10+5</b> (피셔 증초). 레이팅과 기록은 다음 버전에서 열립니다.</p>'
+    + '<button class="btn" disabled>대전 찾기</button></div>'
+    + '</div><div class="acts"><button class="btn" id="n-retry">다시 연결</button><button class="btn" id="n-back">돌아가기 <span class="k">Esc</span></button></div></div>';
+  openPanel($('screen').firstElementChild!);
+  const view = (st: NetState) => {
+    const el = document.getElementById('net'); if (!el) return;
+    const dot = (c: string) => '<i class="dot ' + c + '"></i>';
+    if (st.s === 'off') el.innerHTML = dot('off') + '<div><b>서버가 설정되지 않은 빌드</b><small>배포 때 VITE_SERVER_URL(저장소 변수 SERVER_URL)을 넣으면 켜집니다.</small></div>';
+    else if (st.s === 'waking') el.innerHTML = dot('wait') + '<div><b>서버를 깨우는 중 · ' + Math.round((performance.now() - st.since) / 1000) + '초</b><small>무료 서버는 15분 동안 아무도 없으면 잠듭니다. 처음 깨울 때 최대 1분쯤 걸립니다.</small></div>';
+    else if (st.s === 'joining') el.innerHTML = dot('wait') + '<div><b>로비에 들어가는 중…</b><small>WebSocket 연결</small></div>';
+    else if (st.s === 'online') el.innerHTML = dot('on') + '<div><b>연결됨</b><small>서버 v' + st.version + '</small></div>'
+      + '<dl><div><dt>접속</dt><dd>' + st.online + '<span>명</span></dd></div><div><dt>핑</dt><dd>' + st.ping + '<span>ms</span></dd></div><div><dt>시계 차</dt><dd>' + (st.offset > 0 ? '+' : '') + st.offset + '<span>ms</span></dd></div></dl>';
+    else el.innerHTML = dot('err') + '<div><b>연결 실패</b><small>' + st.message + '</small></div>';
+  };
+  netOff?.(); netOff = onNet(view);
+  const tick = window.setInterval(() => { const el = document.getElementById('net'); if (!el) { clearInterval(tick); return; } if (netState().s === 'waking') view(netState()); }, 1000);
+  void netConnect();
+  $('n-retry').onclick = async () => { sound.tick(); await netDisconnect(); void netConnect(); };
+  $('n-back').onclick = () => { netOff?.(); netOff = null; void netDisconnect(); showTitleMenu(true); };
 }
 
 // ── settings ─────────────────────────────────────────────────────────────
@@ -1043,9 +1162,13 @@ $('btn-reset').onclick = () => { if (!busy && screen === 'puzzle') resetPuzzle()
 $('btn-aim').onclick = () => { aimOn = !aimOn; settings.aim = aimOn; saveSettings(settings); $('btn-aim').classList.toggle('on', aimOn); drawSelection(); };
 $('btn-aim').classList.toggle('on', aimOn);
 document.addEventListener('keydown', e => {
+  if (e.key === 'Alt' && screen === 'title' && !$('screen').classList.contains('dim')) { e.preventDefault(); stage.camLocked = !stage.camLocked; if (stage.camLocked) stage.resetCamera(); toast(stage.camLocked ? '시점 고정' : '자유 시점 — 드래그로 돌려 보세요'); return; }
   if (document.getElementById('intro')) return;
+  const typing = (e.target as HTMLElement | null)?.closest?.('input, textarea');
+  if (typing && e.key !== 'Escape') return;
   const overlay = !!$('screen').innerHTML;
   if (e.key === 'Escape') {
+    if (cancelPromotion) { cancelPromotion(); return; }
     if (document.querySelector('.shell') || (overlay && document.getElementById('s-back') && settingsBack)) {
       const back = document.getElementById('b-back') ?? document.getElementById('cx-back') ?? document.getElementById('s-back');
       back?.click(); return;
@@ -1053,6 +1176,7 @@ document.addEventListener('keydown', e => {
     if (document.getElementById('g-back')) { $('g-back').click(); return; }
     if (document.getElementById('l-back')) { $('l-back').click(); return; }
     if (document.getElementById('c-back')) { $('c-back').click(); return; }
+    if (document.getElementById('n-back')) { $('n-back').click(); return; }
     if (overlay && screen !== 'title' && screen !== 'over') { clearScreen(); return; }
     if (screen === 'puzzle' && pz.from >= 0) { pz.from = -1; drawSelection(); return; }
     if (selected >= 0) { selected = -1; drawSelection(); } else menu();
@@ -1083,4 +1207,5 @@ if (import.meta.env.DEV) Object.assign(window, { chung: {
   pick: (o: number) => (document.querySelector('[data-o="' + o + '"]') as HTMLButtonElement)?.click(),
   setMode: (m: Mode) => { mode = m; }, legal: () => legal(pos, mode), unlockAll: () => store.set('v1:allopen', '1'),
   get book() { return book; }, get codex() { return codex; },
+  load: (fen: string) => { newGame(); resetBoard(fen); },
 } });

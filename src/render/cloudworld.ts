@@ -21,13 +21,13 @@ class NightGrade extends Effect {
   }
 }
 
-export interface CloudPipeline { render(): void; setSize(w: number, h: number): void; enter(r: T.WebGLRenderer): void; leave(r: T.WebGLRenderer): void; ready: boolean }
+export interface CloudPipeline { render(): void; setSize(w: number, h: number): void; enter(r: T.WebGLRenderer): void; leave(r: T.WebGLRenderer): void; setQuality(q: string): void; ready: boolean }
 
 /**
  * @param lightDir direction to the moon in our world frame (y up, +z toward Black's side)
  * @param altitude metres above sea level of our world origin (the clouds float far below it)
  */
-export async function createCloudPipeline(renderer: T.WebGLRenderer, scene: T.Scene, camera: T.PerspectiveCamera, lightDir: T.Vector3, altitude = 2600): Promise<CloudPipeline> {
+export async function createCloudPipeline(renderer: T.WebGLRenderer, scene: T.Scene, camera: T.PerspectiveCamera, lightDir: T.Vector3, altitude = 2600, progress: (f: number) => void = () => {}, quality = 'auto'): Promise<CloudPipeline> {
   const base = import.meta.env.BASE_URL + 'takram/';
   // our frame → East-North-Up at 37.5°N 127°E (three +x = east, +y = up, −z = north), 1 unit = 1 m
   const origin = new Geodetic(radians(127), radians(37.5), altitude).toECEF();
@@ -39,7 +39,15 @@ export async function createCloudPipeline(renderer: T.WebGLRenderer, scene: T.Sc
   const clouds = new CloudsEffect(camera);
   clouds.worldToECEFMatrix.copy(worldToECEF);
   clouds.coverage = .42;
-  clouds.qualityPreset = 'medium';
+  // free optimizations (invisible at night): no crepuscular rays, no haze (aerial perspective already fogs), lighter shadows
+  clouds.lightShafts = false; clouds.haze = false;
+  const shadowCfg = (clouds as unknown as { shadow?: { cascadeCount: number; mapSize: T.Vector2 } }).shadow;
+  if (shadowCfg) { shadowCfg.cascadeCount = 2; shadowCfg.mapSize?.set?.(256, 256); }
+  const applyQuality = (q: string) => {
+    clouds.qualityPreset = q === 'ultra' ? 'high' : q === 'mid' || q === 'low' ? 'low' : 'medium';
+    clouds.resolutionScale = q === 'low' ? .5 : q === 'mid' ? .75 : 1;
+  };
+  applyQuality(quality);
   clouds.localWeatherVelocity.set(.0006, .0002);
   clouds.sunDirection.copy(sunECEF);
 
@@ -61,12 +69,13 @@ export async function createCloudPipeline(renderer: T.WebGLRenderer, scene: T.Sc
   const linear = (t: T.Texture) => { t.minFilter = T.LinearMipMapLinearFilter; t.magFilter = T.LinearFilter; t.wrapS = t.wrapT = T.RepeatWrapping; t.colorSpace = T.NoColorSpace; t.needsUpdate = true; return t; };
   const volume = (t: T.Data3DTexture) => { t.format = T.RedFormat; t.minFilter = t.magFilter = T.LinearFilter; t.wrapS = t.wrapT = t.wrapR = T.RepeatWrapping; t.colorSpace = T.NoColorSpace; t.needsUpdate = true; return t; };
   const tex = new T.TextureLoader();
+  let done = 0; const tick = <V,>(x: Promise<V>) => x.then(v => { progress(.1 + .7 * (++done / 6)); return v; });
   const [weather, turbulence, shape, detail, stbn, starsBuf] = await Promise.all([
-    tex.loadAsync(base + 'local_weather.png'), tex.loadAsync(base + 'turbulence.png'),
-    new DataTextureLoader(T.Data3DTexture, parseUint8Array, { width: 128, height: 128, depth: 128 }).loadAsync(base + 'shape.bin'),
-    new DataTextureLoader(T.Data3DTexture, parseUint8Array, { width: 32, height: 32, depth: 32 }).loadAsync(base + 'shape_detail.bin'),
-    new STBNLoader().loadAsync(base + 'stbn.bin'),
-    fetch(base + 'stars.bin').then(r => r.arrayBuffer()),
+    tick(tex.loadAsync(base + 'local_weather.png')), tick(tex.loadAsync(base + 'turbulence.png')),
+    tick(new DataTextureLoader(T.Data3DTexture, parseUint8Array, { width: 128, height: 128, depth: 128 }).loadAsync(base + 'shape.bin')),
+    tick(new DataTextureLoader(T.Data3DTexture, parseUint8Array, { width: 32, height: 32, depth: 32 }).loadAsync(base + 'shape_detail.bin')),
+    tick(new STBNLoader().loadAsync(base + 'stbn.bin')),
+    tick(fetch(base + 'stars.bin').then(r => r.arrayBuffer())),
   ]);
   clouds.localWeatherTexture = linear(weather); clouds.turbulenceTexture = linear(turbulence);
   clouds.shapeTexture = volume(shape as T.Data3DTexture); clouds.shapeDetailTexture = volume(detail as T.Data3DTexture);
@@ -78,6 +87,7 @@ export async function createCloudPipeline(renderer: T.WebGLRenderer, scene: T.Sc
   (starsMat as unknown as { worldToECEFMatrix?: T.Matrix4 }).worldToECEFMatrix?.copy(worldToECEF);
   const stars = new T.Points(new StarsGeometry(starsBuf), starsMat); stars.frustumCulled = false;
   await gen.catch(() => undefined);
+  progress(.9);
 
   const composer = new EffectComposer(renderer, { frameBufferType: T.HalfFloatType, multisampling: 4 });
   composer.addPass(new RenderPass(scene, camera));
@@ -91,5 +101,6 @@ export async function createCloudPipeline(renderer: T.WebGLRenderer, scene: T.Sc
     setSize(w, h) { composer.setSize(w, h); },
     enter(r) { saved = { tone: r.toneMapping, exp: r.toneMappingExposure }; r.toneMapping = T.NoToneMapping; r.toneMappingExposure = 1; scene.add(stars); },
     leave(r) { r.toneMapping = saved.tone; r.toneMappingExposure = saved.exp; scene.remove(stars); },
+    setQuality: applyQuality,
   };
 }

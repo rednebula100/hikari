@@ -18,3 +18,5 @@ All sounds are synthesized at runtime. No GPL code is used.
 | dli/waves (© 2014 David Li) — FFT ocean, ported in `src/render/ocean.ts` | sea world | MIT |
 | @takram/three-clouds, @takram/three-atmosphere, @takram/three-geospatial (+ textures in `public/takram/`) | cloud world | MIT |
 | postprocessing (pmndrs) | cloud world composer | Zlib |
+| Poly Haven "Ship Pinnace" (`public/assets/pinnace.glb`, Draco + WebP build) | sea world ship | CC0 |
+| @colyseus/sdk (client, lazy), @colyseus/core + @colyseus/ws-transport (server) | online groundwork | MIT |

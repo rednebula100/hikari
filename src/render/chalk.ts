@@ -63,9 +63,10 @@ export class Chalk {
     const r: P = [b[0] - h * Math.cos(ang + 0.45), b[1] - h * Math.sin(ang + 0.45)];
     this.path([l, b, r], { ...o, dash: undefined, delay: (o.delay ?? 0) + (o.dur ?? 220) * 0.9, dur: o.dur === 0 ? 0 : 90 });
   }
-  circle(c: P, r: number, o: Parameters<Chalk['path']>[1] = {}) {
-    const pts: P[] = [];
-    for (let i = 0; i <= 40; i++) { const a = i / 40 * Math.PI * 2.08 + 0.3; pts.push([c[0] + r * Math.cos(a), c[1] + r * Math.sin(a)]); }
+  /** `sweep` < 1 draws only that fraction of the ring (used to show impulse). */
+  circle(c: P, r: number, o: Parameters<Chalk['path']>[1] & { sweep?: number; start?: number } = {}) {
+    const pts: P[] = [], sw = o.sweep ?? 1.04, a0 = o.start ?? .3, n = Math.max(8, Math.round(48 * sw));
+    for (let i = 0; i <= n; i++) { const a = a0 + i / n * Math.PI * 2 * sw; pts.push([c[0] + r * Math.cos(a), c[1] + r * Math.sin(a)]); }
     this.path(pts, o);
   }
   cross(c: P, s: number, o: Parameters<Chalk['path']>[1] = {}) {

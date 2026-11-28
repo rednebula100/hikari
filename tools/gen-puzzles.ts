@@ -45,20 +45,21 @@ function layout(nW: number, nB: number): string | null {
 }
 
 // ── exhaustive enumeration with goal selection ──
-interface Leaf { t: Tally; path: string[]; contacts: number; bounce: boolean }
+interface Leaf { t: Tally; path: string[]; contacts: number; bounce: boolean; ability: boolean }
 function enumerate(fen: string, depth: number) {
   const start = fromFen(fen)
   const levels: Leaf[][] = Array.from({ length: depth }, () => [])
-  const walk = (p: Pos, d: number, t: Tally, path: string[], contacts: number, bounce: boolean) => {
+  const walk = (p: Pos, d: number, t: Tally, path: string[], contacts: number, bounce: boolean, ability: boolean) => {
     for (const m of targetMoves(p)) {
       const r = targetStep(p, m)
       const c = r.out.clash, leaf: Leaf = { t: addTally(t, r.out), path: [...path, uci(m)], contacts: contacts + (c?.sim.contacts.length ?? 0),
-        bounce: bounce || !!c?.sim.tracks.find(x => x.id === c.attacker)?.keys.some(k => k.v < -1e-9) }
+        bounce: bounce || !!c?.sim.tracks.find(x => x.id === c.attacker)?.keys.some(k => k.v < -1e-9),
+        ability: ability || !!r.out.shock?.length || m.via !== undefined || !!c?.phalanx.length }
       levels[path.length].push(leaf)
-      if (path.length + 1 < depth) walk(r.pos, d - 1, leaf.t, leaf.path, leaf.contacts, leaf.bounce)
+      if (path.length + 1 < depth) walk(r.pos, d - 1, leaf.t, leaf.path, leaf.contacts, leaf.bounce, leaf.ability)
     }
   }
-  walk(start, depth, emptyTally(), [], 0, false)
+  walk(start, depth, emptyTally(), [], 0, false, false)
   return { start, levels }
 }
 
@@ -99,7 +100,7 @@ function judgeTarget(fen: string, depth: number): Puzzle | null {
     const maxP = Math.max(...firstMoves.map(m => hitMomentum(start, m)))
     const counter = hitMomentum(start, first) < maxP - 1e-6 ? 1 : 0
     const quiet = first.flag !== 'c' ? 1.5 : 0
-    const score = rarity * 1.6 + (depth - 1) * 2.5 + Math.min(6, s0.contacts) * .3 + counter * 1.2 + quiet + (s0.bounce ? .5 : 0) + goalWeight(g) * .5 - (sol.length - 1) * .4
+    const score = rarity * 1.6 + (depth - 1) * 2.5 + Math.min(6, s0.contacts) * .3 + counter * 1.2 + quiet + (s0.bounce ? .5 : 0) + (s0.ability ? 1.4 : 0) + goalWeight(g) * .5 - (sol.length - 1) * .4
     if (!best || score > best.score) best = { g, sol, score }
   }
   if (!best) return null

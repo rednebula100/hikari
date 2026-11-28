@@ -1,0 +1,23 @@
+# Render Blueprint for the 衝 online server (groundwork for ranked play).
+# Render dashboard → New → Blueprint → pick this repository → Apply.
+services:
+  - type: web
+    name: hikari-server
+    runtime: node
+    plan: free            # sleeps after 15 idle minutes; the client wakes it via /healthz
+    region: singapore     # closest free region to Korea
+    branch: main
+    buildCommand: cd server && npm ci
+    startCommand: cd server && npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    buildFilter:
+      paths:
+        - server/**
+        - src/engine/**
+        - render.yaml
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: ALLOWED_ORIGINS
+        value: https://rednebula100.github.io,http://localhost:5173,http://localhost:5179

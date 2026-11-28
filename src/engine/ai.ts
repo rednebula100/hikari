@@ -1,7 +1,7 @@
 // Alpha-beta opponent for classic chess and 衝. Internally it searches
 // pseudo-legal moves and treats "own King removed" as a loss (king-capture search),
 // which is equivalent to legality for search purposes and much cheaper.
-import { MASS, file, kingSq, legal, make, other, pseudo, rank, toFen, type Mode, type Move, type Pos, type Side } from './rules.ts'
+import { MASS, file, kingSq, legal, make, other, pseudo, rank, ringOf, pliesToCollapse, toFen, type Mode, type Move, type Pos, type Side } from './rules.ts'
 
 export type Level = 1 | 2 | 3
 export const LEVEL_NAME: Record<Level, string> = { 1: '쉬움', 2: '보통', 3: '어려움' }
@@ -16,6 +16,8 @@ export function rng(seed: number) {
 const centre = (s: number) => 3.5 - Math.max(Math.abs(file(s) - 3.5), Math.abs(rank(s) - 3.5)) // 0 edge … 3 centre
 function evaluate(p: Pos, side: Side, mode: Mode): number {
   let v = 0
+  const soon = mode === 'clash' ? pliesToCollapse(p) : Infinity, doomed = p.fallen ?? 0
+  const dread = soon < 14 ? 1 - soon / 14 : 0
   for (let s = 0; s < 64; s++) {
     const x = p.board[s]; if (!x) continue
     let w = VALUE[x.kind]
@@ -23,6 +25,7 @@ function evaluate(p: Pos, side: Side, mode: Mode): number {
     if (x.kind === 'p') w += 0.05 * (x.side === 'w' ? rank(s) - 1 : 6 - rank(s))
     if (x.kind === 'k') w += mode === 'clash' ? 0.25 * centre(s) - (centre(s) === 0 ? 0.6 : 0) : -0.04 * centre(s)
     if (mode === 'clash' && x.kind !== 'k' && centre(s) === 0) w -= 0.04 * MASS[x.kind] // edges are cliffs
+    if (dread && ringOf(s) === doomed) w -= (x.kind === 'k' ? 30 : VALUE[x.kind]) * dread // the ring that is about to fall
     v += x.side === side ? w : -w
   }
   return v

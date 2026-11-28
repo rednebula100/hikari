@@ -1,0 +1,26 @@
+{
+  "name": "hikari-server",
+  "private": true,
+  "version": "0.8.0",
+  "type": "module",
+  "description": "衝 online groundwork: health check, lobby presence, clock-ready rooms (Colyseus on Render)",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node --import tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "test": "tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@colyseus/core": "^0.18.30",
+    "@colyseus/ws-transport": "^0.18.5",
+    "tsx": "^4.23.15"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.20.7",
+    "typescript": "5.9"
+  }
+}

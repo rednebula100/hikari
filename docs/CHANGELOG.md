@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.8.0 — collapse & online groundwork (2026-11-28)
+- **Fun review (bot self-play):** draws were 80–90%. New 衝 rules — **collapse** (rings fall at moves 30 · 44 · 58 with
+  everything on them) and **stalemate = loss** — bring decisive games to 90–100% at ~45 moves. Taught in the tutorial
+  (experiment 9) and the problem book.
+- **Ground ripple:** knight only, one circular wave, ends exactly flat. **Impulse** is the drawn arc of the target ring.
+- **Title camera** fixed; **Alt** frees it. **World loading screen**; cloud quality follows the quality tiers.
+  Random matches only visit lab · sea · clouds. Locked book tiers hide names and stars. Lattice drifts diagonally.
+- **Sea:** a real wooden ship (Poly Haven "Ship Pinnace", CC0), much bigger; the board stands on a hatch cover in the
+  mast-free waist; per-world camera limits keep the view out of the deckhouses.
+- **꾸미기 detail editor:** six parts (white/black pieces, light/dark squares, frame, table) × colour, opacity,
+  roughness, metal, glass, coat; own colour picker (hue ring + SV diamond, RGB/alpha sliders with ± steppers, hex,
+  before/after); presets (3 built-in + 12 of your own). Board tiles now sample UVs per square (fixes offset squares).
+- **Online groundwork:** `server/` (Colyseus 0.18 on Render — `/healthz`, lobby presence, ping and clock offset,
+  server-authoritative Fischer chess clock with tests), `render.yaml` Blueprint, title menu 「온라인」 panel with wake-up.
+  Ranked play itself is not implemented yet.
+- Fixes: promotion dialog robustness (worker timeout + main-thread fallback, Esc cancels), preview equations kept until
+  contact, lab lamp bulb and light made coaxial, compact captured-piece cases restored.
+
 ## 0.7.0 — abilities, worlds rebuilt, ateliers (2026-11-28)
 - **Piece abilities (衝/光):** knight stomps only mass ≤ 3 and every landing sends a shockwave (adjacent enemies ≤ 5
   shift one square, off the edge they fall); bishop cushion shot (one reflection off the rim); pawn phalanx (+1 mass per

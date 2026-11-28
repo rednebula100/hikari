@@ -3,10 +3,10 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { loadSet, type ChessSet } from './assets';
 import { Chalk } from './chalk';
 import { Debris } from './physics';
-import { latheSet, tableMaterial, boardTheme, type Look } from './looks';
+import { latheSet, tableMaterial, boardTheme, tuned, applySpec, specOf, type Look, type Part, type MatSpec } from './looks';
 import { buildWorld, type Built, type WorldId } from './worlds';
 import { C, gamma } from '../engine/collide';
-import { MASS, cheb, file, rank, type Outcome, type Pos, type Piece, type Kind, type Side } from '../engine/rules';
+import { MASS, cheb, file, rank, ringOf, type Outcome, type Pos, type Piece, type Kind, type Side } from '../engine/rules';
 import type { Sound } from '../ui/audio';
 
 export const X = (s: number) => -(file(s) - 3.5);
@@ -129,7 +129,7 @@ export class Stage {
 
   // ── the night physics lab ──────────────────────────────────────────────
   private buildRoom(box: T.Box3) {
-    const bulbPos = new T.Vector3(0, 9.2, .4);
+    const bulbPos = new T.Vector3(0, 9.2, 0); // bulb, shade, cord, light cone, dust and the spot share one axis over the board centre
     // incandescent lamp: warm spot, cone of light, dust
     this.spot = new T.SpotLight(0xffc98a, 220, 30, .62, .75, 1.6);
     this.spot.position.copy(bulbPos); this.spot.target.position.set(0, 0, 0);
@@ -213,6 +213,7 @@ export class Stage {
   /** Snap every model to the position (no animation). */
   sync(pos: Pos, bump = true) {
     this.shadowDirty = true;
+    this.setFallen(pos.fallen ?? 0);
     if (bump) { this.epoch++; this.railLight(false, []); this.camOverride = null; this.debris.clear(); }
     const live = new Set<string>();
     pos.board.forEach((p, s) => {
@@ -307,19 +308,21 @@ export class Stage {
     this.cool();
     const m = out.move, mover = before.board[m.from]!;
     const obj = this.model(mover);
+    if (!out.clash) this.chalk.erase(220); // collisions keep the predicted equations until contact
     if (out.clash) await this.playClash(before, out);
     else if (out.stomp) await this.playStomp(obj, m.from, m.to, out.stomp.victim);
     else if (m.flag === 'k' || m.flag === 'q') {
       await this.slide(obj, m.from, m.to);
       const rf = m.flag === 'k' ? m.from + 3 : m.from - 4, rt = m.flag === 'k' ? m.from + 1 : m.from - 1;
       const rook = before.board[rf]; if (rook) await this.slide(this.model(rook), rf, rt);
-    } else if (m.kind === 'n') await this.hop(obj, m.from, m.to);
+    } else if (m.kind === 'n') { await this.hop(obj, m.from, m.to); this.quake(X(m.to), Z(m.to), 6); }
     else {
       if (m.via !== undefined) { await this.slide(obj, m.from, m.via); this.sound.clack(4, .4); await this.slide(obj, m.via, m.to); }
       else await this.slide(obj, m.from, m.to);
       for (const v of out.removed) { const vo = this.pieces.get(v.id); if (vo) { this.sound.clack(MASS[v.kind] + MASS[m.kind], 1); await this.sink(vo); } }
     }
     if (out.shock?.length && epoch === this.epoch) await this.playShock(m.to, out.shock);
+    if (out.collapse?.length && epoch === this.epoch) for (const c of out.collapse) await this.playCollapse(c.ring, c.gone);
     if (epoch !== this.epoch) return; // the board was replaced meanwhile (e.g. title demo skipped)
     this.sound.settle();
     this.sync(after, false);
@@ -328,7 +331,7 @@ export class Stage {
 
   /** The knight's landing shockwave: neighbours slide one square away, or over the cliff. */
   private async playShock(land: number, list: { id: string; from: number; to: number | null }[]) {
-    this.sound.stomp(3); this.flash(new T.Vector3(X(land), this.surface + .2, Z(land)), 5); this.quake(X(land), Z(land), 6);
+    this.sound.stomp(3); this.flash(new T.Vector3(X(land), this.surface + .2, Z(land)), 5);
     this.chalk.circle([X(land), Z(land)], .7, { dur: 160, alpha: .5 }); this.chalk.circle([X(land), Z(land)], 1.25, { dur: 260, delay: 60, alpha: .3 });
     await Promise.all(list.map(async x => {
       const o = this.pieces.get(x.id); if (!o) return;
@@ -442,11 +445,11 @@ export class Stage {
       }
       while (contactIx < cl.sim.contacts.length && cl.sim.contacts[contactIx].t <= t) {
         const c = cl.sim.contacts[contactIx++];
+        if (contactIx === 1) this.chalk.erase(360);
         const ma = MASS[(before.board.find(p => p?.id === c.a) ?? before.board[out.move.from])!.kind as Kind] ?? 1;
         const mb = MASS[(before.board.find(p => p?.id === c.b))?.kind ?? 'p'];
         this.sound.clack(ma + mb, Math.abs(c.before[0] - c.after[0]) * ma, contactIx);
         this.flash(at(c.s).setY(this.surface + .4), contactIx === 1 ? 9 : 4);
-        { const q = at(c.s); this.quake(q.x, q.z, Math.min(10, Math.abs(c.before[0] - c.after[0]) * ma)); }
         this.kick(c.a, step, c.after[0] - c.before[0], ma); this.kick(c.b, step, c.after[1] - c.before[1], mb);
       }
       while (t >= nextStrobe && nextStrobe <= 1) {
@@ -511,26 +514,74 @@ export class Stage {
   private themed = false;
   private table!: T.Mesh;
   private makePiece: (k: Kind, s: Side) => T.Object3D = (k, s) => this.set.make(k, s);
-  /** 꾸미기: piece set, table finish, board theme. Call sync() afterwards to rebuild the pieces. */
+  /** Detail-editor materials, per part, keyed by the material they were copied from (shared between pieces). */
+  private tunedMats = new Map<Part, Map<T.Material, T.MeshPhysicalMaterial>>();
+  private custom: NonNullable<Look['custom']> = {};
+  private tuneMat(part: Part, base: T.Material, spec: MatSpec) {
+    let byBase = this.tunedMats.get(part);
+    if (!byBase) this.tunedMats.set(part, byBase = new Map());
+    let m = byBase.get(base);
+    if (!m) byBase.set(base, m = tuned(base, spec));
+    return m;
+  }
+  /** 꾸미기: piece set, table finish, board theme and per-part overrides. Call sync() afterwards to rebuild the pieces. */
   setLook(look: Look) {
     if (!this.set) return;
+    for (const byBase of this.tunedMats.values()) for (const m of byBase.values()) m.dispose();
+    this.tunedMats.clear(); this.custom = { ...(look.custom ?? {}) };
     const king = new T.Box3().setFromObject(this.set.make('k', 'w')), kh = king.max.y - king.min.y;
-    this.makePiece = look.pieces === 'abg' ? (k, s) => this.set.make(k, s) : latheSet(look.pieces, kh);
+    const make = look.pieces === 'abg' ? (k: Kind, s: Side) => this.set.make(k, s) : latheSet(look.pieces, kh);
+    this.makePiece = (k, side) => {
+      const o = make(k, side), part: Part = side === 'w' ? 'wp' : 'bp', spec = this.custom[part];
+      if (spec) o.traverse(x => { const m = x as T.Mesh; if (m.isMesh) m.material = this.tuneMat(part, m.material as T.Material, spec); });
+      return o;
+    };
     for (const o of this.pieces.values()) this.scene.remove(o);
     this.pieces.clear(); this.hulls.clear(); this.wob.clear();
-    (this.table.material as T.Material).dispose(); this.table.material = tableMaterial(look.table);
-    const theme = boardTheme(look.board), boardMat = (this.qTiles[0]?.material as T.Material[] | undefined)?.[2];
-    this.themed = !!theme;
-    const original = this.qTiles[0]?.userData.boardMat as T.MeshStandardMaterial | undefined;
+    (this.table.material as T.Material).dispose();
+    const tm = tableMaterial(look.table);
+    this.table.material = this.custom.table ? this.tuneMat('table', tm, this.custom.table) : tm;
+    const theme = boardTheme(look.board), cl = this.custom.light, cd = this.custom.dark, cf = this.custom.frame;
+    const original = (this.qTiles[0]?.userData.boardMat ?? (this.qTiles[0]?.material as T.Material[] | undefined)?.[2]) as T.MeshStandardMaterial | undefined;
+    this.themed = !!theme || !!cl || !!cd || !!cf;
+    const lightBase = theme ? theme.light : original, darkBase = theme ? theme.dark : original;
+    const L = cl && lightBase ? this.tuneMat('light', lightBase, cl) : lightBase, D = cd && darkBase ? this.tuneMat('dark', darkBase, cd) : darkBase;
     this.qTiles.forEach((m, i) => {
       const mats = m.material as T.Material[];
       m.userData.boardMat ??= mats[2];
-      mats[2] = theme ? ((file(i) + rank(i)) % 2 ? theme.light : theme.dark) : (m.userData.boardMat as T.Material);
+      mats[2] = ((file(i) + rank(i)) % 2 ? L : D) ?? (m.userData.boardMat as T.Material);
       m.visible = this.themed;
     });
-    const bm = (original ?? boardMat) as T.MeshStandardMaterial | undefined;
-    if (bm) bm.color.set(theme ? theme.frameTint : 0xffffff);
+    if (original) {
+      original.color.set(theme ? theme.frameTint : 0xffffff);
+      // the frame is the board mesh itself (its squares are covered by the tiles whenever anything is themed)
+      this.board.traverse(x => {
+        const m = x as T.Mesh; if (!m.isMesh) return;
+        m.userData.ownMat ??= m.material;
+        if (m.userData.ownMat !== original) return;
+        m.material = cf ? this.tuneMat('frame', original, cf) : original;
+      });
+    }
     this.shadowDirty = true;
+  }
+  /** The look of one part right now (the editor's starting values). */
+  partSpec(part: Part): MatSpec {
+    if (this.custom[part]) return { ...this.custom[part]! };
+    let mat: T.Material | undefined;
+    if (part === 'wp' || part === 'bp') {
+      const side = part === 'wp' ? 'w' : 'b';
+      const o = [...this.pieces.values()].find(p => p.userData.side === side) ?? this.makePiece('p', side);
+      o.traverse(x => { if (!mat && (x as T.Mesh).isMesh) mat = (x as T.Mesh).material as T.Material; });
+    } else if (part === 'table') mat = this.table.material as T.Material;
+    else if (part === 'frame') mat = this.qTiles[0]?.userData.boardMat as T.Material;
+    else mat = (this.qTiles[part === 'light' ? 1 : 0]?.material as T.Material[] | undefined)?.[2];
+    return specOf(mat);
+  }
+  /** Live retune while a slider moves. Returns true when the look had to be rebuilt (the caller re-syncs pieces). */
+  tune(part: Part, spec: MatSpec | null, look: Look): boolean {
+    const live = this.tunedMats.get(part);
+    if (spec && live?.size) { this.custom[part] = spec; for (const m of live.values()) applySpec(m, spec); this.shadowDirty = true; return false; }
+    this.setLook(look); return true;
   }
   private quakes: { x: number; z: number; a: number; t0: number }[] = [];
   private buildQuakeTiles() {
@@ -545,31 +596,96 @@ export class Stage {
     for (let s2 = 0; s2 < 64; s2++) {
       const g = new T.BoxGeometry(1, .14, 1); g.translate(0, -.07, 0);
       const pos = g.getAttribute('position'), uv = g.getAttribute('uv');
-      for (let i = 0; i < pos.count; i++) { const q = uvAt(X(s2) + pos.getX(i), Z(s2) + pos.getZ(i)); uv.setXY(i, q.x, q.y); }
+      // each tile samples the board's own UVs at its four corners (the board's UV layout is not one linear sheet)
+      const corner = new Map<string, T.Vector2>()
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+        const h = probe(X(s2) + sx * .485, Z(s2) + sz * .485)
+        corner.set(sx + ',' + sz, h?.uv ? h.uv.clone().addScaledVector(h.uv.clone().sub(probe(X(s2), Z(s2))?.uv ?? h.uv), .015 / .485) : uvAt(X(s2) + sx * .5, Z(s2) + sz * .5))
+      }
+      for (let i = 0; i < pos.count; i++) { const q = corner.get(Math.sign(pos.getX(i)) + ',' + Math.sign(pos.getZ(i)))!; uv.setXY(i, q.x, q.y); }
       const m = new T.Mesh(g, [side, side, boardMat, side, side, side]);
       m.position.set(X(s2), top + .0015, Z(s2)); m.visible = false; m.receiveShadow = true; m.userData.top = top + .0015;
       this.qTiles.push(m); this.scene.add(m);
     }
   }
+  // ── collapse: rings of the board fall away ──
+  private holes: T.Mesh[] = [];
+  private fallen = 0;
+  private holeMat?: T.MeshBasicMaterial;
+  /** Show fallen rings as holes (instant; used by sync). */
+  setFallen(n: number) {
+    if (!this.qTiles.length) return;
+    if (!this.holes.length) {
+      const cv = document.createElement('canvas'); cv.width = cv.height = 64; const g = cv.getContext('2d')!;
+      const gr = g.createRadialGradient(32, 32, 4, 32, 32, 46); gr.addColorStop(0, '#000'); gr.addColorStop(1, '#0d0a08'); g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+      this.holeMat = new T.MeshBasicMaterial({ map: new T.CanvasTexture(cv), toneMapped: false });
+      for (let s2 = 0; s2 < 64; s2++) { const m = new T.Mesh(new T.PlaneGeometry(1, 1), this.holeMat); m.rotation.x = -Math.PI / 2; m.position.set(X(s2), (this.qTiles[0].userData.top as number) + .004, Z(s2)); m.visible = false; this.holes.push(m); this.scene.add(m); }
+    }
+    this.fallen = n;
+    this.holes.forEach((m, i) => { m.visible = ringOf(i) < n; m.position.y = (this.qTiles[0].userData.top as number) + .004; });
+    this.qTiles.forEach((m, i) => { if (ringOf(i) < n) m.visible = false; });
+    this.shadowDirty = true;
+  }
+  /** Warn of the next ring: red chalk cracks along it (k = 0 clears). */
+  warnCollapse(ring: number, k: number) {
+    this.chalk.remove('warn');
+    if (k <= 0 || ring > 2) return;
+    this.chalk.layer = 'warn';
+    const lo = ring - .5, hi = 7.5 - ring, w = (f: number, r: number): [number, number] => [-(f - 3.5), r - 3.5];
+    const edge = (a: [number, number], b: [number, number]) => {
+      const pts: [number, number][] = []; for (let i = 0; i <= 12; i++) { const t = i / 12; pts.push([a[0] + (b[0] - a[0]) * t + (Math.random() - .5) * .14 * k, a[1] + (b[1] - a[1]) * t + (Math.random() - .5) * .14 * k]); }
+      this.chalk.path(pts, { color: '#ff7a64', width: .03 + .025 * k, alpha: .5 + .4 * k, dur: 300 });
+    };
+    const inner = [w(lo + 1, lo + 1), w(hi - 1, lo + 1), w(hi - 1, hi - 1), w(lo + 1, hi - 1)];
+    for (let i = 0; i < 4; i++) edge(inner[i], inner[(i + 1) % 4]);
+    this.chalk.layer = '';
+  }
+  private async playCollapse(ring: number, gone: { id: string; sq: number }[]) {
+    this.chalk.remove('warn');
+    this.sound.fall(); this.flashScreen();
+    // pieces on the ring go over the edge
+    for (const g of gone) {
+      const o = this.pieces.get(g.id); if (!o) continue;
+      const dir = new T.Vector3(X(g.sq), 0, Z(g.sq)).normalize();
+      this.fall(o, dir, .9);
+    }
+    // the tiles of the ring break away one after another around the board
+    const ringSq = [...Array(64).keys()].filter(i => ringOf(i) === ring).sort((a, b) => Math.atan2(Z(a), X(a)) - Math.atan2(Z(b), X(b)));
+    const t0 = performance.now(), D = this.reduced ? 200 : 1300;
+    for (const i of ringSq) { const m = this.qTiles[i]; m.visible = true; m.userData.spin = (Math.random() - .5) * 2; }
+    await this.tween(D, () => {
+      const now = performance.now();
+      ringSq.forEach((i, k) => {
+        const m = this.qTiles[i], local = Math.max(0, (now - t0 - (k / ringSq.length) * D * .55) / (D * .45));
+        m.position.y = (m.userData.top as number) - local * local * 4; m.rotation.x = local * m.userData.spin; m.rotation.z = -local * m.userData.spin * .7;
+        if (local > .05 && this.holes[i]) this.holes[i].visible = true;
+      });
+    });
+    for (const i of ringSq) { const m = this.qTiles[i]; m.visible = false; m.rotation.set(0, 0, 0); m.position.y = m.userData.top as number; }
+    this.setFallen(ring + 1);
+  }
   /** A circular wave on the floor from (x, z); strength ~ impulse. */
   quake(x: number, z: number, strength: number) {
     if (this.reduced || !this.qTiles.length || this.pyr.u > .01) return;
-    this.quakes.push({ x, z, a: Math.min(.16, .03 + strength * .013), t0: performance.now() });
+    this.quakes = [{ x, z, a: Math.min(.14, .05 + strength * .008), t0: performance.now() }]; // one wave at a time
   }
   private quakeWas = false;
   private updateQuake(now: number) {
     if (!this.quakes.length && !this.quakeWas) return false;
-    this.quakes = this.quakes.filter(q => now - q.t0 < 1400);
+    // a single circular wave: one sine period (crest ahead, trough behind) travels outward at V squares/s;
+    // outside that band the floor is exactly flat, so once the band has left the board every tile is back at rest
+    const V = 8, W = 1.25, R = 11.5;
+    this.quakes = this.quakes.filter(q => (now - q.t0) / 1000 * V < R + W);
     const live = this.quakes.length > 0, height = new Float32Array(64);
     for (const q of this.quakes) {
-      const t = (now - q.t0) / 1000;
+      const front = (now - q.t0) / 1000 * V;
       for (let s2 = 0; s2 < 64; s2++) {
-        const r = Math.hypot(X(s2) - q.x, Z(s2) - q.z), lag = t - r / 7.5;
-        if (lag < 0) continue;
-        height[s2] += q.a * Math.sin(lag * 22) * Math.exp(-lag * 4.2) * Math.exp(-r * .12);
+        const r = Math.hypot(X(s2) - q.x, Z(s2) - q.z), x = (r - front) / W;
+        if (x <= -1 || x >= 1) continue;
+        height[s2] += q.a * Math.sin(Math.PI * x) * (1 / (1 + r * .18)); // crest ahead, trough behind, 0 at both ends
       }
     }
-    this.qTiles.forEach((m, i) => { m.visible = live || this.themed; m.position.y = (m.userData.top as number) + height[i]; });
+    this.qTiles.forEach((m, i) => { m.visible = (live || this.themed) && ringOf(i) >= this.fallen; m.position.y = (m.userData.top as number) + height[i]; });
     // pieces ride the tile under them (offset on the inner model, so playback can keep owning the group)
     for (const o of this.pieces.values()) {
       const inner = o.children[0]; if (!inner) continue;
@@ -743,7 +859,7 @@ export class Stage {
         return;
       }
       const d = this.drag;
-      if (d && (d.moved || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 5)) { d.moved = true; this.yaw -= e.movementX * .005; this.pitch = Math.min(1.35, Math.max(.22, this.pitch + e.movementY * .004)); return; }
+      if (d && !this.camLocked && (d.moved || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 5)) { d.moved = true; this.yaw -= e.movementX * .005; this.pitch = Math.min(1.35, Math.max(.22, this.pitch + e.movementY * .004)); return; }
       const s = this.pick(e.clientX, e.clientY);
       if (s !== this.hoverSq) { this.hoverSq = s; this.onHover(s); }
     });
@@ -756,9 +872,14 @@ export class Stage {
       const d = this.drag; this.drag = undefined; if (!d || d.moved) return; this.onSquare(this.pick(e.clientX, e.clientY), d.button);
     });
     c.addEventListener('pointerleave', () => { this.hoverSq = -1; this.onHover(-1); });
-    c.addEventListener('wheel', e => { e.preventDefault(); this.dist = Math.min(32, Math.max(11, this.dist * Math.exp(Math.sign(e.deltaY) * .07))); }, { passive: false });
+    c.addEventListener('wheel', e => { e.preventDefault(); if (this.camLocked) return; this.dist = Math.min(32, Math.max(11, this.dist * Math.exp(Math.sign(e.deltaY) * .07))); }, { passive: false });
   }
   resetCamera() { this.yaw = 0; this.pitch = .9; this.dist = 21.5; }
+  /** Lowest camera pitch the current world allows (the ship's deckhouses stand around the board). */
+  camFloor = 0;
+  camFar = Infinity;
+  /** The title screen keeps a composed shot; a secret key frees it. */
+  camLocked = false;
   pick(cx: number, cy: number) {
     if (this.pyr.u > .02) return -1;
     const r = this.renderer.domElement.getBoundingClientRect();
@@ -788,17 +909,16 @@ export class Stage {
     if (this.world !== 'lab') this.worlds.get(this.world)?.leave?.(this.renderer);
     for (const [k, w] of this.worlds) w.group.visible = k === id;
     this.lab.visible = id === 'lab';
-    this.world = id;
+    this.world = id; this.camFloor = id === 'lab' ? 0 : this.ensureWorld(id).minPitch ?? 0; this.camFar = id === 'lab' ? Infinity : this.ensureWorld(id).maxDist ?? Infinity;
     if (id === 'lab') {
       this.ground = this.floor;
-      this.spot.position.set(0, 9.2, .4); this.spot.angle = .62; this.spot.penumbra = .75; this.spot.color.copy(this.lampColor);
+      this.spot.position.set(0, 9.2, 0); this.spot.angle = .62; this.spot.penumbra = .75; this.spot.color.copy(this.lampColor);
       this.keyI = 220; this.rim.color.set(0x8fb6ff); this.rim.intensity = .55; this.rim.position.set(-6, 3.5, 9);
       this.fill.color.set(0x2a3550); this.fill.groundColor.set(0x0b0806); this.fill.intensity = .25;
       this.scene.fog = new T.FogExp2(0x05060a, .012); this.renderer.toneMappingExposure = 1; this.renderer.setClearColor(0x05060a);
       this.scene.environmentIntensity = .22;
     } else {
-      let w = this.worlds.get(id);
-      if (!w) { w = buildWorld(id, this.boardTop); this.worlds.set(id, w); this.scene.add(w.group); }
+      const w = this.ensureWorld(id);
       w.group.visible = true; this.ground = w.ground;
       const L = w.light;
       this.spot.position.set(...L.keyPos); this.spot.angle = L.keyAngle; this.spot.penumbra = L.penumbra; this.spot.color.set(L.key); this.keyI = L.keyI;
@@ -810,6 +930,23 @@ export class Stage {
     this.spot.intensity = this.lampOn ? this.keyI : 0;
     this.shadowDirty = true;
     if (id !== 'lab') { const w = this.worlds.get(id)!; w.enter?.(this.renderer); w.resize?.(this.size.w, this.size.h); }
+  }
+  private ensureWorld(id: Exclude<WorldId, 'lab'>): Built {
+    let w = this.worlds.get(id);
+    if (!w) {
+      this.boardTop = new T.Box3().setFromObject(this.board).min.y;
+      w = buildWorld(id, this.boardTop); w.group.visible = false; this.worlds.set(id, w); this.scene.add(w.group); w.setQuality?.(this.quality);
+    }
+    return w;
+  }
+  /** Does entering this world need a loading screen (assets or pipelines not ready yet)? */
+  needsPrepare(id: WorldId) { if (id === 'lab') return false; const w = this.worlds.get(id); return !w || (!!w.prepare && !w.group.userData.prepared); }
+  /** Load a world's heavy assets before it is shown. */
+  async prepareWorld(id: WorldId, progress: (f: number) => void) {
+    if (id === 'lab') return;
+    const w = this.ensureWorld(id);
+    if (w.prepare && !w.group.userData.prepared) { await w.prepare(this.renderer, this.scene, this.camera, progress); w.group.userData.prepared = true; }
+    progress(1);
   }
   /** Establishing shot: start level with the horizon (the sky of the new place), then tilt down onto the board. */
   establish(ms = 2600) {
@@ -836,6 +973,7 @@ export class Stage {
     this.dprCap = cfg[0]; this.renderer.transmissionResolutionScale = cfg[1];
     if (this.spot && this.spot.shadow.mapSize.x !== cfg[2]) { this.spot.shadow.mapSize.set(cfg[2], cfg[2]); this.spot.shadow.map?.dispose(); this.spot.shadow.map = null; }
     this.perf.level = 0; this.perf.steps = []; this.perfWindow.length = 0; this.shadowDirty = true;
+    for (const w of this.worlds?.values() ?? []) w.setQuality?.(q);
     document.body.classList.toggle('q-low', q === 'low');
     this.resize();
   }
@@ -864,7 +1002,7 @@ export class Stage {
       this.updatePyramid(u); this.pyr.was = u > 0; this.pyr.lastU = u; this.pyr.dirty = false; this.shadowDirty = true;
     }
     const breathe = this.reduced ? 0 : Math.sin(now / 4200) * .004;
-    const yaw = this.yaw + breathe + .62 * u, pitch = this.pitch - .45 * u, dist = this.dist * (1 + .1 * u);
+    const yaw = this.yaw + breathe + .62 * u, pitch = Math.max(this.camFloor, this.pitch - .45 * u), dist = Math.min(this.camFar, this.dist) * (1 + .1 * u);
     const seat = this.tmpA.set(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)).multiplyScalar(dist);
     this.aimXNow += (this.aimX - this.aimXNow) * Math.min(1, dt / 220);
     const aim = this.tmpB.set(this.aimXNow * (1 - u), -1.5 * u, this.aimZ * (1 - u) + .2 * u);

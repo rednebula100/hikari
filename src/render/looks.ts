@@ -8,7 +8,37 @@ import type { Kind, Side } from '../engine/rules';
 export type PieceStyle = 'abg' | 'glass' | 'brass' | 'porcelain';
 export type TableStyle = 'walnut' | 'felt' | 'marble' | 'maple';
 export type BoardStyle = 'marble' | 'wood' | 'obsidian' | 'jade';
-export interface Look { pieces: PieceStyle; table: TableStyle; board: BoardStyle }
+/** Parts the detail editor can retune: colour (multiplies any texture), opacity and the PBR knobs. */
+export type Part = 'wp' | 'bp' | 'light' | 'dark' | 'frame' | 'table';
+export interface MatSpec { color: string; alpha: number; rough: number; metal: number; glass: number; coat: number }
+export interface Look { pieces: PieceStyle; table: TableStyle; board: BoardStyle; custom?: Partial<Record<Part, MatSpec>> }
+export const PART_NAMES: Record<Part, string> = { wp: '백 기물', bp: '흑 기물', light: '밝은 칸', dark: '어두운 칸', frame: '테두리', table: '테이블' };
+/** Ready-made looks shown before the player's own presets. */
+export const FACTORY: { name: string; look: Look }[] = [
+  { name: '청자와 흑유', look: { pieces: 'porcelain', board: 'jade', table: 'walnut', custom: { wp: { color: '#9fc9b4', alpha: 1, rough: .14, metal: 0, glass: 0, coat: 1 } } } },
+  { name: '붉은 유리', look: { pieces: 'glass', board: 'obsidian', table: 'marble', custom: { bp: { color: '#d0303a', alpha: 1, rough: .06, metal: 0, glass: .9, coat: 1 } } } },
+  { name: '은과 묵', look: { pieces: 'brass', board: 'wood', table: 'felt', custom: { wp: { color: '#dfe3ea', alpha: 1, rough: .18, metal: 1, glass: 0, coat: 0 } } } },
+];
+/** A physical copy of `from` (keeps its textures) with the spec applied. */
+export function tuned(from: T.Material, spec: MatSpec): T.MeshPhysicalMaterial {
+  const o = from as T.MeshPhysicalMaterial;
+  const m = new T.MeshPhysicalMaterial({ map: o.map ?? null, normalMap: o.normalMap ?? null, roughnessMap: o.roughnessMap ?? null, metalnessMap: o.metalnessMap ?? null, aoMap: o.aoMap ?? null, ior: 1.5, thickness: .8, clearcoatRoughness: .08, side: o.side });
+  if (o.normalScale) m.normalScale.copy(o.normalScale);
+  applySpec(m, spec);
+  return m;
+}
+export function applySpec(m: T.MeshPhysicalMaterial, s: MatSpec) {
+  m.color.set(s.color); m.roughness = s.rough; m.metalness = s.metal; m.transmission = s.glass; m.clearcoat = s.coat;
+  const see = s.alpha < .999;
+  if (m.transparent !== see) { m.transparent = see; m.needsUpdate = true; }
+  m.opacity = s.alpha;
+}
+/** What a material looks like now, as a spec (the editor's starting point). */
+export function specOf(from: T.Material | undefined): MatSpec {
+  const o = (from ?? {}) as Partial<T.MeshPhysicalMaterial>;
+  const clamp = (v: number | undefined, d: number) => Math.max(0, Math.min(1, v ?? d));
+  return { color: '#' + (o.color ? o.color.getHexString() : 'ffffff'), alpha: clamp(o.opacity, 1), rough: clamp(o.roughness, .5), metal: clamp(o.metalness, 0), glass: clamp(o.transmission, 0), coat: clamp(o.clearcoat, 0) };
+}
 export const DEFAULT_LOOK: Look = { pieces: 'abg', table: 'walnut', board: 'marble' };
 export const NAMES = {
   pieces: { abg: 'A Beautiful Game', glass: '유리', brass: '황동과 흑단', porcelain: '백자와 흑유' },

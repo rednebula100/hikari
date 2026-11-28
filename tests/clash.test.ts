@@ -85,7 +85,7 @@ test('衝 fuzz: random games keep invariants (kings on board, one piece per squa
       if (r.out.clash) clashes++
       removed += r.out.removed.length
       p = r.pos
-      assert.ok(kingSq(p, 'w') >= 0 && kingSq(p, 'b') >= 0)
+      if (kingSq(p, 'w') < 0 || kingSq(p, 'b') < 0) { assert.equal(status(p, 'clash', hist).over, true); break } // a king fell with the collapsing ring
       const ids = p.board.filter(Boolean).map(x => x!.id)
       assert.equal(new Set(ids).size, ids.length)
     }

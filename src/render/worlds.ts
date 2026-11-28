@@ -3,6 +3,8 @@
 // are shared. Shaders are hand-written and cheap: one sky dome and one surface each, no reflection passes.
 import * as T from 'three';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { FFTOcean } from './ocean';
 import type { CloudPipeline } from './cloudworld';
 
@@ -26,7 +28,14 @@ export interface Lighting {
 }
 export interface Built {
   group: T.Group; ground: T.Object3D; light: Lighting
+  /** Lowest camera pitch (radians) that keeps the camera clear of the world's own geometry. */
+  minPitch?: number
+  /** Farthest camera distance for the same reason. */
+  maxDist?: number
   update(t: number, renderer?: T.WebGLRenderer): void
+  /** Heavy worlds load assets / compile pipelines here; the UI shows a loading screen meanwhile. */
+  prepare?(renderer: T.WebGLRenderer, scene: T.Scene, camera: T.PerspectiveCamera, progress: (f: number) => void): Promise<void>
+  setQuality?(q: string): void
   /** Worlds with their own render pipeline (post-processing) take over the frame. */
   render?(renderer: T.WebGLRenderer, scene: T.Scene, camera: T.PerspectiveCamera): void
   enter?(renderer: T.WebGLRenderer): void
@@ -115,8 +124,48 @@ function sea(top: number): Built {
   const pl = new T.PointLight(0xffb060, 9, 10, 1.6); pl.position.copy(lamp.position);
   const boat = new T.Group(); boat.add(shadowed(hull), shadowed(deck), shadowed(gun), post, lamp, pl); g.add(boat);
   return {
-    group: g, ground: boat,
+    group: g, ground: boat, minPitch: .8, maxDist: 25,
     light: { key: 0xffd6a8, keyI: 250, keyPos: [2, 11, -3], keyAngle: .9, penumbra: 1, rim: 0xff9a55, rimI: 1.6, rimPos: [0, 3, 40], sky: 0x8090c0, gnd: 0x3a2414, hemiI: .6, fog: 0xc98a6a, fogD: .0, exposure: .62, bg: 0x1a1420, env: .35 },
+    // the real ship: Poly Haven "Ship Pinnace" (CC0) — beam ≈ 2.4 boards, masts far above the camera
+    async prepare(_r, _scene, _cam, progress) {
+      if (boat.userData.ship) return;
+      const base = import.meta.env.BASE_URL, draco = new DRACOLoader().setDecoderPath(base + 'decoders/draco/');
+      const gltf = await new GLTFLoader().setDRACOLoader(draco).loadAsync(base + 'assets/pinnace.glb', e => { if (e.total) progress(e.loaded / e.total * .9); });
+      draco.dispose();
+      const ship = gltf.scene;
+      // at anchor: sails furled (they would hang right where the player's camera sits); masts and rigging stay
+      ship.traverse(o => { const m = o as T.Mesh; if (m.isMesh) { m.castShadow = !/rigging/.test(m.name); m.receiveShadow = true; if (/sails/.test(m.name)) m.visible = false; } });
+      // measured offline from the model (scene units): the waist between the main and fore masts is mast-free,
+      // the main deck there is flat at y 2.98, and the ship's boat stowed on it (x ±2, z 1..5.8) is cleared away
+      const DECK = 2.98, SPOT = new T.Vector3(0, DECK, 3.4)
+      const size = new T.Box3().setFromObject(ship).getSize(new T.Vector3())
+      const S = 62 / size.x; ship.scale.setScalar(S) // a big ship: the board is a crate on its main deck
+      // the camera stands aft and looks forward over the board to the foremast and the forecastle
+      ship.rotation.y = Math.PI; ship.updateMatrixWorld(true)
+      const at = ship.localToWorld(SPOT.clone())
+      ship.position.set(-at.x, top - at.y, -at.z); ship.updateMatrixWorld(true)
+      // remove the stowed boat (and the rope ends above it) with a clipping box: only fragments inside all six planes vanish
+      const cut = new T.Box3().setFromPoints([new T.Vector3(-2.1, DECK + .03, .9), new T.Vector3(2.1, 9, 5.9)].map(v => ship.localToWorld(v)))
+      const planes = [
+        new T.Plane(new T.Vector3(1, 0, 0), -cut.max.x), new T.Plane(new T.Vector3(-1, 0, 0), cut.min.x),
+        new T.Plane(new T.Vector3(0, 1, 0), -cut.max.y), new T.Plane(new T.Vector3(0, -1, 0), cut.min.y),
+        new T.Plane(new T.Vector3(0, 0, 1), -cut.max.z), new T.Plane(new T.Vector3(0, 0, -1), cut.min.z),
+      ]
+      _r.localClippingEnabled = true
+      ship.traverse(o => { const m = o as T.Mesh; if (m.isMesh) for (const mat of [m.material].flat() as T.Material[]) { mat.clippingPlanes = planes; mat.clipIntersection = true; mat.clipShadows = true } })
+      // the boat stood over the cargo hatch: close it with a plank lid the board can rest on
+      const lidMat = new T.MeshStandardMaterial({ map: plankTexture('#3b2c22', 'rgba(0,0,0,.35)'), roughness: .85 })
+      const lidC = ship.localToWorld(new T.Vector3(0, DECK, 3.4)), lidSize = cut.getSize(new T.Vector3())
+      lidMat.map!.wrapS = lidMat.map!.wrapT = T.RepeatWrapping; lidMat.map!.repeat.set(lidSize.x / 9, lidSize.z / 9)
+      const lid = shadowed(new T.Mesh(new T.BoxGeometry(lidSize.x, .3, lidSize.z), lidMat)); lid.position.set(lidC.x, top - .14, lidC.z)
+      lid.receiveShadow = true
+      ship.userData.deck = top
+      boat.clear(); boat.add(ship, lid); boat.add(pl); pl.position.set(0, top + 5, 14)
+      boat.userData.ship = ship
+      // the waterline sits ~3 m below the main deck
+      ocean.position.y = top - 2.5 * S
+      progress(1);
+    },
     update(t, r) {
       if (r) fft.update(r, t * 1000);
       // the sea and the sky roll; the boat — and the board — stay level for play
@@ -149,20 +198,25 @@ function clouds(top: number): Built {
   const ground = new T.Group(); ground.add(shadowed(slab), shadowed(trim), under);
   g.add(sky, ground);
   // takram volumetric clouds + physical sky (MIT), loaded the first time this world is drawn
-  let pipe: CloudPipeline | null = null, loading = false, active = false, size: [number, number] = [1, 1];
+  let pipe: CloudPipeline | null = null, loading = false, active = false, size: [number, number] = [1, 1], quality = 'auto';
   return {
     group: g, ground,
     light: { key: 0xd2dcff, keyI: 170, keyPos: [-3, 12, 3], keyAngle: .95, penumbra: 1, rim: 0xb4c4ff, rimI: 1.2, rimPos: [-12, 6, 40], sky: 0x2a3c6a, gnd: 0x0a0c18, hemiI: .45, fog: 0x0b1328, fogD: 0, exposure: 1, bg: 0x060a16, env: .2 },
     update(t) { (sky.material as T.ShaderMaterial).uniforms.t.value = t; },
-    render(r, scene, camera) {
-      if (pipe) { pipe.render(); return; }
-      r.render(scene, camera);
-      if (loading) return;
+    render(r, scene, camera) { if (pipe) pipe.render(); else r.render(scene, camera); },
+    async prepare(r, scene, camera, progress) {
+      if (pipe || loading) return;
       loading = true;
-      import('./cloudworld').then(m => m.createCloudPipeline(r, scene, camera, moon)).then(p => {
+      try {
+        progress(.05);
+        const m = await import('./cloudworld');
+        const p = await m.createCloudPipeline(r, scene, camera, moon, 2600, progress, quality);
         pipe = p; sky.visible = false; p.setSize(...size); if (active) p.enter(r);
-      }).catch(e => { console.warn('clouds unavailable', e); });
+        p.render(); // compile the effect shaders behind the loading screen
+        progress(1);
+      } catch (e) { console.warn('clouds unavailable', e); }
     },
+    setQuality(q) { quality = q; pipe?.setQuality(q); },
     enter(r) { active = true; pipe?.enter(r); },
     leave(r) { active = false; pipe?.leave(r); },
     resize(w, h) { size = [w, h]; pipe?.setSize(w, h); },
