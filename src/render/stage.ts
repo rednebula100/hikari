@@ -597,7 +597,8 @@ export class Stage {
   private resize() {
     this.size = { w: Math.max(1, this.host.clientWidth), h: Math.max(1, this.host.clientHeight) };
     this.renderer.setPixelRatio(this.dprCap);
-    this.renderer.setSize(this.size.w, this.size.h, false); this.camera.aspect = this.size.w / this.size.h; this.camera.updateProjectionMatrix();
+    this.renderer.setSize(this.size.w, this.size.h, false); if (this.world !== 'lab') this.worlds?.get(this.world)?.resize?.(this.size.w, this.size.h);
+    this.camera.aspect = this.size.w / this.size.h; this.camera.updateProjectionMatrix();
   }
   lampFlicker(on: boolean) { this.lampOn = on; if (this.spot) this.spot.intensity = on ? this.keyI : 0; }
   private boardTop = 0;
@@ -605,6 +606,7 @@ export class Stage {
   setWorld(id: WorldId) {
     if (!this.spot || id === this.world) return;
     const box = new T.Box3().setFromObject(this.board); this.boardTop = box.min.y;
+    if (this.world !== 'lab') this.worlds.get(this.world)?.leave?.(this.renderer);
     for (const [k, w] of this.worlds) w.group.visible = k === id;
     this.lab.visible = id === 'lab';
     this.world = id;
@@ -628,6 +630,7 @@ export class Stage {
     }
     this.spot.intensity = this.lampOn ? this.keyI : 0;
     this.shadowDirty = true;
+    if (id !== 'lab') { const w = this.worlds.get(id)!; w.enter?.(this.renderer); w.resize?.(this.size.w, this.size.h); }
   }
   /** Establishing shot: start level with the horizon (the sky of the new place), then tilt down onto the board. */
   establish(ms = 2600) {
@@ -671,7 +674,7 @@ export class Stage {
     const dt = Math.min(60, now - this.last); this.last = now;
     this.anims = this.anims.filter(a => a.update(now));
     const physics = this.debris.step(dt), rocking = this.wobble(dt);
-    if (this.world !== 'lab') this.worlds.get(this.world)?.update(now / 1000);
+    if (this.world !== 'lab') this.worlds.get(this.world)?.update(now / 1000, this.renderer);
     if (physics || rocking) this.shadowDirty = true;
     // camera: player seat with slow breathing, or the collision rail
     const goal = this.pyr.on ? 1 : 0;
@@ -715,7 +718,8 @@ export class Stage {
     if (!moving && this.settled && this.frame % 2) return;
     this.settled = !moving;
     const t0 = performance.now();
-    this.renderer.render(this.scene, this.camera);
+    const W = this.world !== 'lab' ? this.worlds.get(this.world) : undefined;
+    if (W?.render) W.render(this.renderer, this.scene, this.camera); else this.renderer.render(this.scene, this.camera);
     this.govern(now, performance.now() - t0, moving);
   }
 

@@ -3,6 +3,8 @@
 // are shared. Shaders are hand-written and cheap: one sky dome and one surface each, no reflection passes.
 import * as T from 'three';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
+import { FFTOcean } from './ocean';
+import type { CloudPipeline } from './cloudworld';
 
 export type WorldId = 'lab' | 'sea' | 'clouds' | 'aurora' | 'orbit' | 'wr104';
 export const WORLDS: { id: WorldId; name: string; sub: string }[] = [
@@ -22,7 +24,15 @@ export interface Lighting {
   sky: number; gnd: number; hemiI: number
   fog: number; fogD: number; exposure: number; bg: number; env: number
 }
-export interface Built { group: T.Group; ground: T.Object3D; light: Lighting; update(t: number): void }
+export interface Built {
+  group: T.Group; ground: T.Object3D; light: Lighting
+  update(t: number, renderer?: T.WebGLRenderer): void
+  /** Worlds with their own render pipeline (post-processing) take over the frame. */
+  render?(renderer: T.WebGLRenderer, scene: T.Scene, camera: T.PerspectiveCamera): void
+  enter?(renderer: T.WebGLRenderer): void
+  leave?(renderer: T.WebGLRenderer): void
+  resize?(w: number, h: number): void
+}
 
 const GLSL = /* glsl */`
 float h1(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -85,22 +95,9 @@ function sea(top: number): Built {
   const u = sky.material.uniforms;
   u.turbidity.value = 6.5; u.rayleigh.value = 2.4; u.mieCoefficient.value = .006; u.mieDirectionalG.value = .86; u.sunPosition.value.copy(sunDir);
   sky.renderOrder = -10; sky.frustumCulled = false;
-  const ocean = surface(/* glsl */`
-    uniform float t; uniform vec3 sunDir, horizon, zenith, deep, sunCol; varying vec3 wp;
-    float H(vec2 p){ return fbm(p + vec2(t*.045, t*.028)) + .55*fbm(p*2.6 - vec2(t*.07, -t*.02)); }
-    void main(){
-      vec2 p = wp.xz*.07; float e = .05, h = H(p);
-      vec3 n = normalize(vec3((h - H(p + vec2(e, 0.)))*2.4, 1., (h - H(p + vec2(0., e)))*2.4));
-      vec3 v = normalize(cameraPosition - wp), r = reflect(-v, n);
-      float fr = .02 + .98*pow(1. - max(dot(n, v), 0.), 5.);
-      vec3 skyc = mix(horizon, zenith, clamp(r.y*2.2, 0., 1.));
-      vec3 col = mix(deep*(.7 + .6*h), skyc, fr);
-      float s = max(dot(r, sunDir), 0.);
-      col += sunCol*(pow(s, 420.)*14. + pow(s, 40.)*.55);
-      float d = length(wp.xz - cameraPosition.xz);
-      col = mix(col, horizon, smoothstep(80., 520., d));
-      gl_FragColor = vec4(col, 1.);${OUT}}`,
-    { sunDir: { value: sunDir }, horizon: { value: c3(0xf08a52) }, zenith: { value: c3(0x37548a) }, deep: { value: c3(0x0b1d2b) }, sunCol: { value: c3(0xffd59a) } });
+  // FFT ocean ported from dli/waves (MIT) — see ocean.ts
+  const fft = new FFTOcean({ wind: [7, 9], choppiness: 1.4, sunDir, horizon: c3(0xf08a52), zenith: c3(0x37548a), deep: c3(0x0f2e44), sunCol: c3(0xffd59a) });
+  const ocean = fft.mesh; ocean.userData.fft = fft;
   ocean.position.y = top - 1.15;
   far.add(sky, ocean);
   // the little boat: a hull and a deck cut from the same outline, a lantern at the bow
@@ -120,8 +117,8 @@ function sea(top: number): Built {
   return {
     group: g, ground: boat,
     light: { key: 0xffd6a8, keyI: 250, keyPos: [2, 11, -3], keyAngle: .9, penumbra: 1, rim: 0xff9a55, rimI: 1.6, rimPos: [0, 3, 40], sky: 0x8090c0, gnd: 0x3a2414, hemiI: .6, fog: 0xc98a6a, fogD: .0, exposure: .62, bg: 0x1a1420, env: .35 },
-    update(t) {
-      (ocean.material as T.ShaderMaterial).uniforms.t.value = t;
+    update(t, r) {
+      if (r) fft.update(r, t * 1000);
       // the sea and the sky roll; the boat — and the board — stay level for play
       far.rotation.z = Math.sin(t * .45) * .012; far.rotation.x = Math.sin(t * .31) * .008;
       (pl as T.PointLight).intensity = 8 + Math.sin(t * 9) * .4 + Math.sin(t * 23) * .3;
@@ -146,34 +143,29 @@ function clouds(top: number): Built {
       col = mix(col, vec3(1., .97, .9)*(1.05 - maria), disc);
       col += vec3(.55,.62,.85) * (pow(max(m, 0.), 900.)*.8 + pow(max(m, 0.), 60.)*.18 + pow(max(m, 0.), 8.)*.05);
       gl_FragColor = vec4(col, 1.);${OUT}}`, { moon: { value: moon } });
-  const layer = (y: number, scale: number, speed: number, alpha: number) => {
-    const m = surface(/* glsl */`
-      uniform float t, scale, speed, alpha; uniform vec3 moon; varying vec3 wp;
-      void main(){
-        vec2 p = wp.xz*scale + vec2(t*speed, t*speed*.4);
-        float f = fbm(p), dens = smoothstep(.36, .74, f);
-        float lit = clamp((f - fbm(p + moon.xz*.35))*4. + .55, 0., 1.);
-        vec3 col = mix(vec3(.03,.04,.085), vec3(.66,.72,.9), pow(lit, 1.4)*dens);
-        col += vec3(.06,.07,.1)*dens;
-        float d = length(wp.xz - cameraPosition.xz);
-        vec3 haze = vec3(.035,.05,.1);
-        col = mix(col, haze, smoothstep(60., 480., d));
-        gl_FragColor = vec4(col, alpha*mix(dens, 1., smoothstep(200., 480., d)));${OUT}}`,
-      { scale: { value: scale }, speed: { value: speed }, alpha: { value: alpha }, moon: { value: moon } }, 1400, alpha < 1);
-    m.position.y = y; return m;
-  };
-  const base = layer(top - 9, .012, .004, 1), upper = layer(top - 3.5, .028, .010, .82);
-  upper.renderOrder = 2;
-  const slab = new T.Mesh(new T.BoxGeometry(12, .8, 12), new T.MeshStandardMaterial({ color: 0xd8d2c8, roughness: .28, metalness: .02 })); slab.position.y = top - .4;
+  const slab = new T.Mesh(new T.BoxGeometry(12, .8, 12), new T.MeshStandardMaterial({ color: 0x23252c, roughness: .22, metalness: .1 })); slab.position.y = top - .4;
   const trim = new T.Mesh(new T.BoxGeometry(12.3, .14, 12.3), new T.MeshStandardMaterial({ color: 0xb59252, metalness: .95, roughness: .3 })); trim.position.y = top - .06;
-  const rock = new T.Mesh(new T.ConeGeometry(7.6, 6.5, 4, 1), new T.MeshStandardMaterial({ color: 0x3c3a40, roughness: .9, flatShading: true }));
-  rock.rotation.set(Math.PI, Math.PI / 4, 0); rock.position.y = top - .8 - 3.25;
-  const ground = new T.Group(); ground.add(shadowed(slab), shadowed(trim), rock);
-  g.add(sky, base, upper, ground);
+  const under = new T.Mesh(new T.BoxGeometry(11.4, .5, 11.4), new T.MeshStandardMaterial({ color: 0x15161b, roughness: .5, metalness: .2 })); under.position.y = top - 1.05;
+  const ground = new T.Group(); ground.add(shadowed(slab), shadowed(trim), under);
+  g.add(sky, ground);
+  // takram volumetric clouds + physical sky (MIT), loaded the first time this world is drawn
+  let pipe: CloudPipeline | null = null, loading = false, active = false, size: [number, number] = [1, 1];
   return {
     group: g, ground,
-    light: { key: 0xc6d4ff, keyI: 190, keyPos: [-3, 12, 3], keyAngle: .95, penumbra: 1, rim: 0xa9bbff, rimI: 1.4, rimPos: [-12, 6, 40], sky: 0x2a3c6a, gnd: 0x0a0c18, hemiI: .5, fog: 0x0b1328, fogD: .0, exposure: 1, bg: 0x060a16, env: .2 },
-    update(t) { for (const m of [sky, base, upper]) (m.material as T.ShaderMaterial).uniforms.t.value = t; },
+    light: { key: 0xd2dcff, keyI: 170, keyPos: [-3, 12, 3], keyAngle: .95, penumbra: 1, rim: 0xb4c4ff, rimI: 1.2, rimPos: [-12, 6, 40], sky: 0x2a3c6a, gnd: 0x0a0c18, hemiI: .45, fog: 0x0b1328, fogD: 0, exposure: 1, bg: 0x060a16, env: .2 },
+    update(t) { (sky.material as T.ShaderMaterial).uniforms.t.value = t; },
+    render(r, scene, camera) {
+      if (pipe) { pipe.render(); return; }
+      r.render(scene, camera);
+      if (loading) return;
+      loading = true;
+      import('./cloudworld').then(m => m.createCloudPipeline(r, scene, camera, moon)).then(p => {
+        pipe = p; sky.visible = false; p.setSize(...size); if (active) p.enter(r);
+      }).catch(e => { console.warn('clouds unavailable', e); });
+    },
+    enter(r) { active = true; pipe?.enter(r); },
+    leave(r) { active = false; pipe?.leave(r); },
+    resize(w, h) { size = [w, h]; pipe?.setSize(w, h); },
   };
 }
 
