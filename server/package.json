@@ -1,7 +1,7 @@
 {
   "name": "shou-server",
   "private": true,
-  "version": "0.8.1",
+  "version": "0.9.0",
   "type": "module",
   "description": "shou (衝) online groundwork: health check, lobby presence, clock-ready rooms (Colyseus on Render)",
   "engines": {

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.0 — ranked play (2026-11-28)
+- **랭킹전** in the 온라인 panel: pick 3+2 · 5+3 · 10+5, find a match, play 衝 against a person, see your new rating.
+  Researched from lichess (Glicko-2, 1500/350 start, "?" while RD > 110, lag compensation, abort on no first move,
+  abandonment wins) and Chess.com (matchmaking from a narrow window widening with wait).
+- Server (`server/src/`): matchmaking queue with widening rating windows (`lobby.ts`, tested); `MatchRoom` validates
+  every move with the shared engine, runs a Fischer clock with lag compensation and an **animation grace** (the next
+  clock starts only after the collision has played), first-move abort, draw offers, resignation, 40 s reconnection,
+  abandonment, flag fall; Glicko-2 (`glicko2.ts`, checked against Glickman's worked example); results written to
+  Firestore in one transaction (`users` ratings + `matches` record). End-to-end script and a sparring bot in `server/test/`.
+- Client: two live clocks, abort/draw/resign bar (resign asks twice), opponent-disconnect countdown, Black plays from
+  Black's side of the table, result card with the rating change, leaderboard (Google accounts), and **refresh-to-rejoin**.
+  Ranked games only use worlds that are already loaded (no loading screen while the clock runs).
+
 ## 0.8.1 — shou, accounts groundwork (2026-11-28)
 - Project renamed **shou** (衝): spec `SHOU-MASTER-SPEC.md`, packages, save keys `shou:*` (old `chung:*` saves are
   carried over automatically). The GitHub repository keeps the name `hikari` (submitted link).

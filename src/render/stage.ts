@@ -874,7 +874,9 @@ export class Stage {
     c.addEventListener('pointerleave', () => { this.hoverSq = -1; this.onHover(-1); });
     c.addEventListener('wheel', e => { e.preventDefault(); if (this.camLocked) return; this.dist = Math.min(32, Math.max(11, this.dist * Math.exp(Math.sign(e.deltaY) * .07))); }, { passive: false });
   }
-  resetCamera() { this.yaw = 0; this.pitch = .9; this.dist = 21.5; }
+  /** The side of the table the player sits on (0 = White's side, π = Black's). */
+  homeYaw = 0;
+  resetCamera() { this.yaw = this.homeYaw; this.pitch = .9; this.dist = 21.5; }
   /** Lowest camera pitch the current world allows (the ship's deckhouses stand around the board). */
   camFloor = 0;
   camFar = Infinity;
@@ -952,7 +954,7 @@ export class Stage {
   establish(ms = 2600) {
     if (this.reduced) return;
     const p1 = .9, d1 = 21.5;
-    this.pitch = .02; this.dist = 30; this.yaw = 0;
+    this.pitch = .02; this.dist = 30; this.yaw = this.homeYaw;
     this.camera.position.set(0, this.surface + 2, -30); this.look.set(0, 2, 20);
     void this.tween(ms, u => { const k = u < .25 ? 0 : (u - .25) / .75, e = k * k * (3 - 2 * k); this.pitch = .02 + (p1 - .02) * e; this.dist = 30 + (d1 - 30) * e; });
   }

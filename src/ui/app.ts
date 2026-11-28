@@ -13,8 +13,8 @@ import { Loader } from './loader';
 import { WORLDS, TIER_WORLD, type WorldId } from '../render/worlds';
 import { DEFAULT_LOOK, NAMES, PART_NAMES, FACTORY, type Look, type Part, type MatSpec } from '../render/looks';
 import { colorPicker } from './picker';
-import { accountsConfigured, onAccount, signInGoogle, signInGuest, signOut as accountSignOut, rename as accountRename, type Profile } from '../online/account';
-import { configured as netConfigured, connect as netConnect, disconnect as netDisconnect, onNet, netState, type NetState } from '../online/net';
+import { accountsConfigured, onAccount, signInGoogle, signInGuest, signOut as accountSignOut, rename as accountRename, leaderboard, refreshProfile, type Profile } from '../online/account';
+import { configured as netConfigured, connect as netConnect, disconnect as netDisconnect, onNet, netState, onQueue, queueState, queue, unqueue, serverNow, onMatched, resumable, resume, type MatchEvents, type NetState, type QueueState, type Match, type MatchSync, type Moved, type MatchEnd, type ClockSnap } from '../online/net';
 import { intro } from './intro';
 import { ENTRIES, GROUPS, RARITY, byId, detect, newTally, type GameTally } from '../content/codex';
 import { targetMoves, targetStep, emptyTally, addTally, achieved, findMove, mated, defend, uci, type Puzzle, type Seal, type Tally } from '../content/puzzle';
@@ -193,6 +193,7 @@ async function boot() {
   await new Promise<void>(r => gsap.to(loader.el, { opacity: 0, y: 8, duration: .35, ease: 'power2.in', onComplete: () => r() }));
   stage.sync(pos);
   title(false);
+  tryResume();
 }
 
 // ── title sequence: switch, flicker, Newton's cradle ────────────────────
@@ -245,10 +246,10 @@ function showTitleMenu(instant: boolean) {
     + row('t-codex', '03', '현상 도감', found + ' / ' + ENTRIES.length + ' 발견')
     + row('t-tut', '04', '실험 노트', tutorialDone() ? '다시 보기' : '처음이라면')
     + row('t-look', '05', '꾸미기', NAMES.pieces[look.pieces])
-    + row('t-online', '06', '온라인', netConfigured() ? '랭킹전 준비 중' : '서버 미설정')
+    + row('t-online', '06', '온라인', netConfigured() ? '랭킹전 · 순위표' : '서버 미설정')
     + row('t-set', '07', '설정', '')
     + '</div></div>'
-    + '<div class="foot l"><span class="lbl">Red Nebula · v0.8</span></div><div class="foot r"><button id="t-sound">' + (sound.muted ? '소리 켜기' : '소리 끄기') + '</button><button id="t-credits">크레딧</button></div>';
+    + '<div class="foot l"><span class="lbl">Red Nebula · v0.9</span></div><div class="foot r"><button id="t-sound">' + (sound.muted ? '소리 켜기' : '소리 끄기') + '</button><button id="t-credits">크레딧</button></div>';
   $('t-start').onclick = () => { sound.unlock(); if (tutorialDone()) matchSetup(); else { toast('처음이군요 — 실험 노트부터 펼칩니다'); controls(); } };
   $('t-book').onclick = () => { sound.unlock(); openBook(); };
   $('t-codex').onclick = () => { sound.unlock(); openCodex(); };
@@ -320,7 +321,7 @@ $('logo').onclick = () => spin($('logo-spin'), $('logo'));
 // ── a game ───────────────────────────────────────────────────────────────
 function resetBoard(fen: string) {
   titleToken++; stage.flickMode = false; stage.camLocked = false;
-  pos = fromFen(fen); truth = pos; hist = [pos]; outs = []; tally = newTally();
+  pos = fromFen(fen); truth = pos; hist = [pos]; outs = []; tally = newTally(); me = 'w'; stage.homeYaw = 0;
   stage.showStale(new Map()); history = []; moveNo = 0; selected = -1; busy = false;
   stage.chalk.clearNow(); stage.clearStrobe(); stage.sync(pos);
   $('case-me').innerHTML = ''; $('case-them').innerHTML = '';
@@ -447,11 +448,11 @@ async function onSquare(sq: number, button: number) {
   if (pyramid) { togglePyramid(false); return; }
   if (screen === 'lesson' && expPhase === 'controls') { if (button === 2) checkCtl('cancel'); else if (pos.board[sq]?.side === 'w') checkCtl('select'); }
   if (screen === 'puzzle' && puz && declaring()) return declareClick(sq, button);
-  if (busy || (screen !== 'play' && screen !== 'lesson' && screen !== 'puzzle') || pos.turn !== 'w') return;
+  if (busy || (screen !== 'play' && screen !== 'lesson' && screen !== 'puzzle') || pos.turn !== me) return;
   if (screen === 'lesson' && expPhase !== 'do') return;
   if (button === 2 || sq < 0) { selected = -1; pending = null; drawSelection(); if (screen === 'lesson') hint(); return; }
   const own = pos.board[sq];
-  if (own?.side === 'w' && sq !== selected && !(pending && pending.to === sq)) { selected = sq; pending = null; sound.tick(); drawSelection(); if (screen === 'lesson') hint(); return; }
+  if (own?.side === me && sq !== selected && !(pending && pending.to === sq)) { selected = sq; pending = null; sound.tick(); drawSelection(); if (screen === 'lesson') hint(); return; }
   if (selected < 0) return;
   const ms = targetsOf(selected).filter(m => m.to === sq);
   if (!ms.length) { selected = -1; pending = null; drawSelection(); if (screen === 'lesson') hint(); return; }
@@ -478,7 +479,7 @@ function promotion(ms: Move[]): Promise<Move | null> {
   return new Promise(res => {
     cancelPromotion = () => { cancelPromotion = null; clearScreen(); res(null); };
     $('screen').className = 'dim';
-    $('screen').innerHTML = '<div class="panel dlg"><div class="ph"><span class="lbl">승진</span></div><div class="pb"><h2>무엇이 될까</h2><div class="promo">' + (['q', 'r', 'b', 'n'] as Kind[]).map(k => '<button data-k="' + k + '">' + GLYPH.w[k] + '</button>').join('') + '</div></div></div>';
+    $('screen').innerHTML = '<div class="panel dlg"><div class="ph"><span class="lbl">승진</span></div><div class="pb"><h2>무엇이 될까</h2><div class="promo">' + (['q', 'r', 'b', 'n'] as Kind[]).map(k => '<button data-k="' + k + '">' + GLYPH[me][k] + '</button>').join('') + '</div></div></div>';
     document.querySelectorAll<HTMLButtonElement>('[data-k]').forEach(b => b.onclick = e => { e.stopPropagation(); cancelPromotion = null; clearScreen(); res(ms.find(m => m.promo === b.dataset.k) ?? ms[0]); });
   });
 }
@@ -486,7 +487,7 @@ function promotion(ms: Move[]): Promise<Move | null> {
 function specimen(side: Side, kind: Kind, label: string) {
   const el = document.createElement('div'); el.className = 'spec';
   el.innerHTML = '<b>' + GLYPH[side][kind] + '</b><small>' + label + '</small>';
-  $(side === 'b' ? 'case-me' : 'case-them').append(el);
+  $(side !== me ? 'case-me' : 'case-them').append(el);
   gsap.from(el, { y: -18, opacity: 0, duration: .35, ease: 'expo.out' });
 }
 function record(before: Pos, out: Outcome) {
@@ -510,6 +511,7 @@ function record(before: Pos, out: Outcome) {
 async function commit(m: Move) {
   busy = true; selected = -1;
   stage.chalk.remove('hover'); stage.chalk.remove('target'); sound.chalk(180); // the preview stays until contact
+  if (match && screen === 'play') return onlineCommit(m);
   if (variant === 'light' && screen === 'play') return lightTurn(m);
   await play(m);
   if (screen === 'lesson') { busy = false; return explain(); }
@@ -1055,13 +1057,20 @@ function openLook() {
 
 // ── online (groundwork): wake the server, show presence and latency; ranked play comes later ──
 let netOff: (() => void) | null = null;
+let rankedTc = store.get('v1:tc') || '5+3';
+const TCS = ['3+2', '5+3', '10+5'];
+const QUEUE_WHY: Record<string, string> = { login: '랭킹전은 로그인(Google 또는 손님) 후에 할 수 있습니다', tc: '알 수 없는 시간 규정', twice: '같은 계정이 이미 다른 창에서 찾는 중입니다', server: '서버가 대국을 만들지 못했습니다 — 다시 시도해 주세요' };
+const fmtWait = (ms: number) => Math.floor(ms / 60000) + ':' + String(Math.floor(ms / 1000) % 60).padStart(2, '0');
 function openOnline() {
+  screen = 'title';
   $('screen').className = 'dim';
-  $('screen').innerHTML = '<div class="panel dlg online"><div class="ph"><span class="lbl">온라인</span></div><div class="pb">'
+  $('screen').innerHTML = '<div class="panel dlg online"><div class="ph"><span class="lbl">온라인</span><span class="lbl">衝 랭킹전</span></div><div class="pb">'
     + '<div class="net" id="net"></div><div class="acct" id="acct"></div>'
-    + '<div class="ranked"><div class="rk-h"><b>랭킹전</b><span class="tag">준비 중</span></div>'
-    + '<p>서버가 판정하는 衝 대국. 체스 시계 — <b>3+2</b> · <b>5+3</b> · <b>10+5</b> (피셔 증초). 레이팅과 기록은 다음 버전에서 열립니다.</p>'
-    + '<button class="btn" disabled>대전 찾기</button></div>'
+    + '<div class="ranked"><div class="rk-h"><b>랭킹전</b><span class="tag" id="rk-count"></span></div>'
+    + '<p>서버가 판정하는 衝 대국 · 피셔 시계 · Glicko-2 레이팅. 첫 수를 25초 안에 두지 않으면 중단됩니다.</p>'
+    + '<div class="seg tcs">' + TCS.map(t => '<button data-tc="' + t + '" class="' + (t === rankedTc ? 'on' : '') + '">' + t + '</button>').join('') + '</div>'
+    + '<div class="rk-q" id="rk-q"></div></div>'
+    + '<div class="board-top"><div class="rk-h"><b>순위표</b><span class="tag">Google 계정</span></div><ol id="lb"><li class="muted">불러오는 중…</li></ol></div>'
     + '</div><div class="acts"><button class="btn" id="n-retry">다시 연결</button><button class="btn" id="n-back">돌아가기 <span class="k">Esc</span></button></div></div>';
   openPanel($('screen').firstElementChild!);
   const view = (st: NetState) => {
@@ -1070,11 +1079,38 @@ function openOnline() {
     if (st.s === 'off') el.innerHTML = dot('off') + '<div><b>서버가 설정되지 않은 빌드</b><small>배포 때 VITE_SERVER_URL(저장소 변수 SERVER_URL)을 넣으면 켜집니다.</small></div>';
     else if (st.s === 'waking') el.innerHTML = dot('wait') + '<div><b>서버를 깨우는 중 · ' + Math.round((performance.now() - st.since) / 1000) + '초</b><small>무료 서버는 15분 동안 아무도 없으면 잠듭니다. 처음 깨울 때 최대 1분쯤 걸립니다.</small></div>';
     else if (st.s === 'joining') el.innerHTML = dot('wait') + '<div><b>로비에 들어가는 중…</b><small>WebSocket 연결</small></div>';
-    else if (st.s === 'online') el.innerHTML = dot('on') + '<div><b>연결됨 · ' + esc(st.you.name) + (st.you.uid && !st.you.guest ? ' (인증됨)' : st.you.uid ? ' (손님 인증)' : '') + '</b><small>서버 v' + st.version + '</small></div>'
-      + '<dl><div><dt>접속</dt><dd>' + st.online + '<span>명</span></dd></div><div><dt>로그인</dt><dd>' + st.signed + '<span>명</span></dd></div><div><dt>핑</dt><dd>' + st.ping + '<span>ms</span></dd></div><div><dt>시계 차</dt><dd>' + (st.offset > 0 ? '+' : '') + st.offset + '<span>ms</span></dd></div></dl>';
+    else if (st.s === 'online') el.innerHTML = dot('on') + '<div><b>연결됨 · ' + esc(st.you.name) + (st.you.uid ? ' · ' + st.you.rating + (st.you.provisional ? '?' : '') : ' · 로그인 안 됨') + '</b><small>서버 v' + st.version + '</small></div>'
+      + '<dl><div><dt>접속</dt><dd>' + st.online + '<span>명</span></dd></div><div><dt>찾는 중</dt><dd>' + Object.values(st.searching).reduce((a, b) => a + b, 0) + '<span>명</span></dd></div><div><dt>핑</dt><dd>' + st.ping + '<span>ms</span></dd></div></dl>';
     else el.innerHTML = dot('err') + '<div><b>연결 실패</b><small>' + st.message + '</small></div>';
+    const cnt = document.getElementById('rk-count');
+    if (cnt) cnt.textContent = st.s === 'online' ? TCS.map(t => t + ' ' + (st.searching[t] ?? 0)).join(' · ') : '';
+    queueView(queueState());
   };
+  // the queue area: find / searching (elapsed, window) / errors
+  const queueView = (q: QueueState) => {
+    const el = document.getElementById('rk-q'); if (!el) return;
+    const st = netState(), ready = st.s === 'online' && !!st.you.uid;
+    // redraw only when something visible changes (the elapsed time ticks separately)
+    const key = q.state + '|' + (q.state === 'searching' ? q.tc + q.range : q.state === 'error' ? q.reason : '') + '|' + ready + '|' + rankedTc + '|' + (st.s === 'online' && !st.you.uid);
+    if (el.dataset.key === key) return;
+    el.dataset.key = key;
+    if (q.state === 'searching') {
+      el.innerHTML = '<div class="searching"><i class="dot wait"></i><b>' + q.tc + ' 상대 찾는 중 · <span id="rk-wait">' + fmtWait(serverNow() - q.since) + '</span></b><small>' + (q.range ? '레이팅 ±' + q.range + ' 안에서' : '레이팅 제한 없음') + '</small></div><button class="btn" id="rk-cancel">취소</button>';
+      $('rk-cancel').onclick = () => { sound.tick(); unqueue(); };
+    } else {
+      el.innerHTML = (q.state === 'error' ? '<small class="err">' + (QUEUE_WHY[q.reason] ?? q.reason) + '</small>' : '')
+        + '<button class="btn main" id="rk-go"' + (ready ? '' : ' disabled') + '>대전 찾기 <span class="k">' + rankedTc + '</span></button>'
+        + (st.s === 'online' && !st.you.uid ? '<small>먼저 위에서 로그인하세요.</small>' : '');
+      document.getElementById('rk-go')?.addEventListener('click', () => { sound.stamp(); queue(rankedTc); });
+    }
+  };
+  document.querySelectorAll<HTMLButtonElement>('[data-tc]').forEach(b => b.onclick = () => {
+    if (queueState().state === 'searching') return;
+    rankedTc = b.dataset.tc!; store.set('v1:tc', rankedTc); sound.tick();
+    document.querySelectorAll('[data-tc]').forEach(x => x.classList.toggle('on', x === b)); queueView(queueState());
+  });
   netOff?.(); netOff = onNet(view);
+  const qOff = onQueue(queueView);
   // account (Firebase Auth): Google or guest; the server verifies the token when the lobby is joined
   const acct = (p: Profile | null) => {
     const el = document.getElementById('acct'); if (!el) return;
@@ -1082,7 +1118,7 @@ function openOnline() {
     const ns = netState(); if (p && ns.s === 'online' && !ns.you.uid) void netDisconnect().then(() => netConnect());
     if (!accountsConfigured()) { el.innerHTML = '<span class="lbl">계정</span><small>이 빌드에는 Firebase 설정이 없습니다 (FIREBASE_* 변수).</small>'; return; }
     el.innerHTML = p
-      ? '<span class="lbl">계정</span><div class="who"><b>' + esc(p.name) + '</b><small>' + (p.guest ? '손님 계정 · 이 기기에만 남음' : 'Google 계정') + ' · 레이팅 ' + p.rating + ' · ' + p.games + '판</small></div>'
+      ? '<span class="lbl">계정</span><div class="who"><b>' + esc(p.name) + '</b><small>' + (p.guest ? '손님 계정 · 이 기기에만 남음 · 순위표 제외' : 'Google 계정') + ' · 레이팅 ' + p.rating + (p.provisional ? '?' : '') + ' · ' + p.games + '판</small></div>'
         + '<div class="acts2"><input id="a-name" maxlength="16" placeholder="이름 바꾸기"><button class="btn sm" id="a-ren">바꾸기</button>' + (p.guest ? '<button class="btn sm" id="a-google">Google로 저장</button>' : '') + '<button class="btn sm" id="a-out">로그아웃</button></div>'
       : '<span class="lbl">계정</span><small>랭킹전 기록은 계정에 남습니다.</small><div class="acts2"><button class="btn sm" id="a-google">Google로 로그인</button><button class="btn sm" id="a-guest">손님으로 시작</button></div>';
     const fail = (e: unknown) => toast('로그인 실패 — ' + ((e as { code?: string }).code ?? String(e)));
@@ -1091,15 +1127,193 @@ function openOnline() {
     document.getElementById('a-guest')?.addEventListener('click', () => { sound.tick(); signInGuest().then(rejoin, fail); });
     document.getElementById('a-out')?.addEventListener('click', () => { sound.tick(); accountSignOut().then(rejoin, fail); });
     const nameIn = document.getElementById('a-name') as HTMLInputElement | null;
-    const doRename = () => { if (nameIn?.value.trim()) accountRename(nameIn.value).then(() => toast('이름을 바꿨습니다'), fail); };
+    const doRename = () => { if (nameIn?.value.trim()) accountRename(nameIn.value).then(() => { toast('이름을 바꿨습니다 — 다음 대국부터 보입니다'); void rejoin(); }, fail); };
     document.getElementById('a-ren')?.addEventListener('click', doRename);
     nameIn?.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') doRename(); });
   };
   const acctOff = onAccount(acct);
-  const tick = window.setInterval(() => { const el = document.getElementById('net'); if (!el) { clearInterval(tick); return; } if (netState().s === 'waking') view(netState()); }, 1000);
+  void refreshProfile().catch(() => {});
+  // leaderboard
+  void leaderboard().then(rows => {
+    const ol = document.getElementById('lb'); if (!ol) return;
+    ol.innerHTML = rows.length ? rows.map((r, i) => '<li><span class="rk">' + (i + 1) + '</span><span class="nm">' + esc(r.name) + '</span><span class="rt">' + r.rating + (r.provisional ? '?' : '') + '</span><span class="wl">' + r.wins + '승 ' + r.losses + '패 ' + r.draws + '무</span></li>').join('') : '<li class="muted">아직 기록이 없습니다 — 첫 이름을 올려 보세요.</li>';
+  }, () => { const ol = document.getElementById('lb'); if (ol) ol.innerHTML = '<li class="muted">순위표를 불러오지 못했습니다.</li>'; });
+  const tick = window.setInterval(() => {
+    const el = document.getElementById('net'); if (!el) { clearInterval(tick); return; }
+    if (netState().s === 'waking') view(netState());
+    const q = queueState(), w = document.getElementById('rk-wait'); if (q.state === 'searching' && w) w.textContent = fmtWait(serverNow() - q.since);
+  }, 500);
   void netConnect();
+  // while waiting in the lobby, quietly load the ship so ranked games can be played at sea too
+  if (stage.needsPrepare('sea')) void stage.prepareWorld('sea', () => {}).catch(() => {});
+  const close = () => { acctOff(); qOff(); netOff?.(); netOff = null; };
+  onlineClose = close;
   $('n-retry').onclick = async () => { sound.tick(); await netDisconnect(); void netConnect(); };
-  $('n-back').onclick = () => { acctOff(); netOff?.(); netOff = null; void netDisconnect(); showTitleMenu(true); };
+  $('n-back').onclick = () => { close(); unqueue(); void netDisconnect(); title(true); };
+}
+let onlineClose: (() => void) | null = null;
+
+// ── ranked game: the server owns the position and the clocks; we propose moves and replay what it confirms ──
+let match: Match | null = null;
+let me: Side = 'w';
+let onlineInfo: { white: { name: string; rating: number; provisional: boolean }; black: { name: string; rating: number; provisional: boolean }; tc: string } | null = null;
+let clock: { snap: ClockSnap; at: number; grace: number } | null = null;
+let netChain: Promise<void> = Promise.resolve();
+let plies = 0, drawOffer: Side | null = null, awayUntil = 0, clockTimer = 0;
+const REASON_KO: Record<string, string> = {
+  checkmate: '체크메이트', stalemate: '궁지 — 어디로 가도 떨어진다', collapse: '킹이 무너진 판과 함께 떨어졌다', fifty: '50수 규칙', repetition: '3회 반복',
+  resign: '기권', time: '시간 초과', agreement: '합의 무승부', abandon: '상대가 돌아오지 않음(이탈)', left: '대국을 떠남', material: '기물 부족',
+  abort: '중단', firstmove: '첫 수를 두지 않아 중단', noshow: '상대가 들어오지 않아 중단',
+};
+type Seat = { color: Side; tc: string; opponent: { name: string; rating: number; provisional: boolean }; open(ev: MatchEvents): Promise<Match | null> };
+onMatched(m => void startOnline(m));
+async function startOnline(m: Seat) {
+  onlineClose?.(); onlineClose = null;
+  sound.stamp(); toast('상대를 찾았다 — ' + m.opponent.name + ' (' + m.opponent.rating + (m.opponent.provisional ? '?' : '') + ')');
+  plies = 0; drawOffer = null; awayUntil = 0; clock = null; netChain = Promise.resolve();
+  variant = 'clash'; mode = 'clash'; screen = 'play'; puz = null;
+  resetBoard(START); me = m.color;
+  clearScreen(); $('note').hidden = true; $('hud').hidden = false; hudFor('play');
+  stage.homeYaw = me === 'w' ? 0 : Math.PI; stage.resetCamera(); stage.aimZ = me === 'w' ? -.7 : .7; stage.aimX = 0;
+  stage.lampFlicker(true); stage.setLamp(2700); sound.setPitch(0); sound.ambience(true);
+  pyramid = false; $('btn-pyr').hidden = true; stage.setPyramid(false, 0, new Map());
+  busy = true; // until the server says we may move
+  // the clock is live: never put a loading screen in front of the board — only worlds that are already loaded
+  const ready = (['lab', 'sea', 'clouds'] as WorldId[]).filter(id => !stage.needsPrepare(id));
+  void goWorld(ready[Math.floor(Math.random() * ready.length)] ?? 'lab', false);
+  setStatus('상대 연결 중…', false, '衝 랭킹 · ' + m.tc);
+  try {
+    match = await m.open({
+      sync: s => { netChain = netChain.then(() => applySync(s)); },
+      start: s => { setStatus(me === 'w' ? '당신의 첫 수 — ' + Math.round(s.firstMoveMs / 1000) + '초 안에' : '상대의 첫 수를 기다린다', false, '衝 랭킹 · ' + onlineInfo?.tc); if (me === 'w') busy = false; renderOnlineBar(); },
+      moved: mv => { netChain = netChain.then(() => onMoved(mv)); },
+      reject: r => { toast('서버가 수를 거절했다 (' + r.reason + ') — 판을 맞춘다'); netChain = netChain.then(() => applySync(r.sync, true)); },
+      draw: d => { drawOffer = d.offer; if (d.offer && d.offer !== me) { sound.check(); toast('상대가 무승부를 제안했다', 3000); } if (d.declined && d.declined !== me) toast('상대가 무승부를 거절했다'); renderOnlineBar(); },
+      away: a => { awayUntil = a.until; toast('상대의 연결이 끊어졌다 — ' + a.seconds + '초 기다린다', 3000); },
+      back: () => { awayUntil = 0; toast('상대가 돌아왔다'); },
+      end: e => { netChain = netChain.then(() => onlineEnd(e)); },
+      lost: () => { if (match) toast('서버와 연결이 끊어졌다'); },
+    });
+    if (!match) throw new Error('자리가 없어졌다');
+  } catch (e) { toast('대국에 들어가지 못했다 — ' + (e instanceof Error ? e.message : e)); title(true); }
+}
+/** After a refresh: if this tab was in a ranked game a moment ago, sit back down. */
+function tryResume() {
+  const r = resumable(); if (!r) return;
+  toast('진행 중이던 랭킹전으로 돌아간다');
+  void startOnline({ color: r.color, tc: r.tc, opponent: r.opponent, open: ev => resume(ev) });
+}
+function nameplate(side: Side) {
+  const p = side === 'w' ? onlineInfo?.white : onlineInfo?.black;
+  return p ? esc(p.name) + ' <i>' + p.rating + (p.provisional ? '?' : '') + '</i>' : '';
+}
+function fmtClock(ms: number) {
+  if (ms < 10_000) return (ms / 1000).toFixed(1);
+  const s = Math.ceil(ms / 1000);
+  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+}
+function clockLeft(side: Side) {
+  if (!clock) return 0;
+  const run = clock.snap.running && clock.snap.turn === side ? Math.max(0, serverNow() - (clock.at + clock.grace)) : 0;
+  return Math.max(0, clock.snap[side] - run);
+}
+function renderClocks() {
+  let el = document.getElementById('clocks');
+  if (!match || screen === 'title') { el?.remove(); clearInterval(clockTimer); return; }
+  if (!el) { el = document.createElement('div'); el.id = 'clocks'; $('hud').append(el); }
+  const them = me === 'w' ? 'b' : 'w', live = (s: Side) => !!clock?.snap.running && clock.snap.turn === s;
+  const plate = (s: Side, cls: string) => {
+    const left = clockLeft(s);
+    return '<div class="clk ' + cls + (live(s) ? ' live' : '') + (left < 20_000 && clock ? ' low' : '') + '"><span class="who">' + nameplate(s) + (s === them && awayUntil > serverNow() ? ' <em>연결 끊김 ' + Math.ceil((awayUntil - serverNow()) / 1000) + '초</em>' : '') + '</span><b>' + (clock ? fmtClock(left) : onlineInfo?.tc ?? '') + '</b></div>';
+  };
+  el.innerHTML = plate(them, 'top') + plate(me, 'bot');
+}
+function renderOnlineBar() {
+  let el = document.getElementById('olbar');
+  if (!match) { el?.remove(); return; }
+  if (!el) { el = document.createElement('div'); el.id = 'olbar'; $('hud').append(el); }
+  const early = plies < 2;
+  el.innerHTML = (early ? '<button class="btn sm" id="o-abort">중단</button>' : '')
+    + (drawOffer && drawOffer !== me ? '<button class="btn sm hot" id="o-accept">무승부 수락</button><button class="btn sm" id="o-decline">거절</button>'
+      : '<button class="btn sm" id="o-draw"' + (early || drawOffer === me ? ' disabled' : '') + '>' + (drawOffer === me ? '무승부 제안함' : '무승부 제안') + '</button>')
+    + '<button class="btn sm" id="o-resign"' + (early ? ' disabled' : '') + '>기권</button>';
+  document.getElementById('o-abort')?.addEventListener('click', () => { sound.tick(); match?.abort(); });
+  document.getElementById('o-draw')?.addEventListener('click', () => { sound.tick(); match?.draw(false); });
+  document.getElementById('o-accept')?.addEventListener('click', () => { sound.tick(); match?.draw(true); });
+  document.getElementById('o-decline')?.addEventListener('click', () => { sound.tick(); match?.draw(false); });
+  document.getElementById('o-resign')?.addEventListener('click', () => confirmResign());
+}
+function confirmResign() {
+  const b = document.getElementById('o-resign'); if (!b || !match) return;
+  if (b.dataset.armed) { match.resign(); return; }
+  b.dataset.armed = '1'; b.textContent = '정말 기권?'; b.classList.add('hot'); sound.check();
+  setTimeout(() => { if (b.isConnected) { delete b.dataset.armed; b.textContent = '기권'; b.classList.remove('hot'); } }, 2500);
+}
+/** Brings the local board to the server's list of moves (first join, reconnect or a rejected move). */
+async function applySync(s: MatchSync, force = false) {
+  onlineInfo = { white: s.white, black: s.black, tc: s.tc };
+  me = s.you; drawOffer = s.drawOffer; awayUntil = s.away[me === 'w' ? 'b' : 'w'] ?? 0;
+  clock = { snap: s.clock, at: s.server, grace: 0 };
+  if (force || s.moves.length !== plies) {
+    let p = fromFen(START); const hs: string[] = [];
+    for (const u of s.moves) { const m = wireMove(p, u); if (!m) break; hs.push(toFen(p, false)); p = make(p, m, 'clash').pos; }
+    pos = p; history = hs; plies = s.moves.length; moveNo = Math.ceil(plies / 2);
+    stage.chalk.clearNow(); stage.sync(pos);
+  }
+  busy = pos.turn !== me || s.over;
+  clearInterval(clockTimer); clockTimer = window.setInterval(renderClocks, 100);
+  renderClocks(); renderOnlineBar();
+  setStatus(s.over ? '대국 종료' : pos.turn === me ? '당신의 차례' : '상대의 차례', false, '衝 랭킹 · ' + s.tc);
+}
+function wireMove(p: Pos, u: string) {
+  const mm = /^(\d+)-(\d+)([qrbn])?(?:@(\d+))?$/.exec(u); if (!mm) return null;
+  const from = +mm[1], to = +mm[2], promo = mm[3], via = mm[4] !== undefined ? +mm[4] : undefined;
+  return legal(p, 'clash').find(x => x.from === from && x.to === to && (x.promo ?? undefined) === (promo ?? undefined) && (x.via ?? undefined) === via) ?? null;
+}
+async function onMoved(mv: Moved) {
+  clock = { snap: mv.clock, at: mv.server, grace: mv.grace }; drawOffer = mv.drawOffer;
+  if (mv.ply <= plies) { renderOnlineBar(); return; } // our own move, already played locally
+  const m = legal(pos, 'clash').find(x => x.from === mv.move.from && x.to === mv.move.to && (x.promo ?? undefined) === (mv.move.promo ?? undefined) && (x.via ?? undefined) === (mv.move.via ?? undefined));
+  if (!m) { toast('판이 어긋났다 — 다시 맞춘다'); return; }
+  plies = mv.ply;
+  await play(m);
+  renderOnlineBar();
+  if (status(pos, 'clash', history).over) return; // the server will announce the end
+  busy = false; sound.tick();
+  if (inCheck(pos, 'clash')) { sound.check(); setStatus('체크 — 킹이 떨어질 위기', true, '경고'); cracks(); }
+  else setStatus('당신의 차례', false, '衝 랭킹 · ' + onlineInfo?.tc);
+}
+async function onlineCommit(m: Move) {
+  if (!match) return;
+  match.move({ from: m.from, to: m.to, promo: m.promo, via: m.via });
+  plies++;
+  netChain = netChain.then(async () => {
+    await play(m);
+    renderOnlineBar();
+    if (!status(pos, 'clash', history).over) setStatus('상대의 차례', false, '衝 랭킹 · ' + onlineInfo?.tc);
+  });
+  await netChain;
+}
+async function onlineEnd(e: MatchEnd) {
+  const m = match; match = null; clearInterval(clockTimer);
+  screen = 'over'; busy = true;
+  document.getElementById('olbar')?.remove();
+  const ab = e.result === 'aborted';
+  const win = !ab && (e.result === '1-0') === (me === 'w') && e.result !== '1/2-1/2', draw = e.result === '1/2-1/2';
+  setStatus(e.result === 'aborted' ? '중단' : '대국 종료 — ' + (REASON_KO[e.reason] ?? e.reason), false, '衝 랭킹 · ' + (onlineInfo?.tc ?? ''));
+  if (e.reason === 'checkmate') await finale(); else await wait(500);
+  ab ? sound.tick() : win ? sound.win() : draw ? sound.tick() : sound.lose();
+  const rc = e.ratings?.[me];
+  const ratingLine = rc ? '<div class="rating-change ' + (rc.delta > 0 ? 'up' : rc.delta < 0 ? 'down' : '') + '"><span>' + rc.before + '</span><i>→</i><b>' + rc.after + (rc.provisional ? '?' : '') + '</b><em>' + (rc.delta > 0 ? '+' : '') + rc.delta + '</em></div>' : ab ? '<p class="sub">레이팅 변화 없음</p>' : '';
+  $('screen').className = 'dim';
+  $('screen').innerHTML = '<div class="panel dlg result"><div class="ph"><span class="lbl">랭킹전 · ' + (onlineInfo?.tc ?? '') + '</span><span class="lbl">' + plies + '수</span></div><div class="pb">'
+    + '<div class="big ' + (ab ? '' : win ? 'win' : draw ? '' : 'lose') + '">' + (ab ? '중단' : win ? '승리' : draw ? '무승부' : '패배') + '</div><p class="sub">' + (REASON_KO[e.reason] ?? e.reason) + '</p>' + ratingLine
+    + '<div class="idx">' + row('r-again', '01', '다시 찾기', rankedTc, 'main') + row('r-home', '02', '처음으로', '') + '</div></div></div>';
+  openPanel($('screen').firstElementChild!); wireRows($('screen'));
+  renderClocks();
+  void refreshProfile().catch(() => {});
+  $('r-again').onclick = () => { void m?.leave(); openOnline(); setTimeout(() => queue(rankedTc), 300); };
+  $('r-home').onclick = () => { void m?.leave(); title(true); };
 }
 
 // ── settings ─────────────────────────────────────────────────────────────
@@ -1149,6 +1363,15 @@ let settingsBack: (() => void) | null = null;
 // ── menu & keys ──────────────────────────────────────────────────────────
 function menu() {
   if (screen === 'title' || screen === 'boot') return;
+  if (match && screen === 'play') {
+    $('screen').className = 'dim';
+    $('screen').innerHTML = '<div class="panel dlg"><div class="ph"><span class="lbl">랭킹전</span></div><div class="pb"><h2>대국 중</h2><p class="sub">시계는 멈추지 않습니다.</p>'
+      + '<div class="idx">' + row('m-back', '01', '계속', '', 'main') + row('m-set', '02', '설정', '') + row('m-resign', '03', plies < 2 ? '중단' : '기권', '') + '</div></div></div>';
+    openPanel($('screen').firstElementChild!); wireRows($('screen'));
+    $('m-back').onclick = clearScreen; $('m-set').onclick = () => openSettings(menu);
+    $('m-resign').onclick = () => { clearScreen(); if (plies < 2) match?.abort(); else match?.resign(); };
+    return;
+  }
   if (screen === 'lesson') return lessonMenu();
   $('screen').className = 'dim';
   const inPuzzle = screen === 'puzzle';

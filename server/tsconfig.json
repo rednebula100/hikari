@@ -1,1 +1,1 @@
-{"compilerOptions":{"target":"ES2022","module":"ESNext","moduleResolution":"Bundler","allowImportingTsExtensions":true,"noEmit":true,"strict":true,"skipLibCheck":true,"types":["node"],"lib":["ES2022","DOM"]},"include":["src/**/*.ts","test/**/*.ts"]}
+{"compilerOptions": {"target": "ES2022", "module": "ESNext", "moduleResolution": "Bundler", "allowImportingTsExtensions": true, "noEmit": true, "strict": true, "skipLibCheck": true, "types": ["node"], "lib": ["ES2022", "DOM"]}, "include": ["src/**/*.ts", "test/**/*.ts"], "exclude": ["test/e2e.ts", "test/bot.ts"]}

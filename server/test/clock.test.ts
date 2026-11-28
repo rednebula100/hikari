@@ -32,3 +32,13 @@ test('pause stops both clocks; resume continues from the stored time', () => {
   c.start(50_000)
   assert.equal(c.remaining('w', 55_000), 15_000)
 })
+
+test('grace: a clock started in the future does not run until then', () => {
+  const c = new ChessClock(10_000)
+  c.start(2_000)
+  assert.equal(c.remaining('w', 1_000), 10_000)
+  assert.equal(c.remaining('w', 3_000), 9_000)
+  assert.ok(c.press('w', 3_000)); c.hold(); c.start(4_000)
+  assert.equal(c.remaining('b', 3_500), 10_000)
+  assert.equal(c.remaining('b', 5_000), 9_000)
+})

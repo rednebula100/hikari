@@ -4,7 +4,7 @@ import {
   GoogleAuthProvider, browserLocalPersistence, getAuth, linkWithPopup, onAuthStateChanged, setPersistence,
   signInAnonymously, signInWithPopup, signOut as fbSignOut, type Auth, type User,
 } from 'firebase/auth'
-import { doc, getDoc, getFirestore, serverTimestamp, setDoc, updateDoc, type Firestore } from 'firebase/firestore'
+import { collection, doc, getDoc, getDocs, getFirestore, limit, orderBy, query, serverTimestamp, setDoc, updateDoc, type Firestore } from 'firebase/firestore'
 import type { Profile } from './account'
 
 let app: FirebaseApp, auth: Auth, db: Firestore
@@ -17,6 +17,7 @@ export function init(config: { apiKey: string; authDomain: string; projectId: st
   db = getFirestore(app)
 }
 
+export const currentUser = () => auth.currentUser
 export const onUser = (f: (u: User | null) => void) => onAuthStateChanged(auth, f)
 
 export async function signInGoogle() {
@@ -42,10 +43,18 @@ export async function ensureProfile(u: User): Promise<Profile> {
   if (!snap.exists()) {
     const name = cleanName(u.displayName ?? '') || '손님' + u.uid.slice(0, 4)
     await setDoc(ref, { name, createdAt: serverTimestamp() })
-    return { uid: u.uid, name, guest: u.isAnonymous, rating: 1500, games: 0 }
+    return { uid: u.uid, name, guest: u.isAnonymous, rating: 1500, games: 0, provisional: true }
   }
   const d = snap.data()
-  return { uid: u.uid, name: d.name ?? '이름 없음', guest: u.isAnonymous, rating: d.rating ?? 1500, games: d.games ?? 0 }
+  return { uid: u.uid, name: d.name ?? '이름 없음', guest: u.isAnonymous, rating: Math.round(d.rating ?? 1500), games: d.games ?? 0, provisional: (d.rd ?? 350) > 110 }
+}
+
+/** Top players: Google accounts that have played (provisional ratings are marked, as on lichess). */
+export async function leaderboard(n = 30) {
+  const snap = await getDocs(query(collection(db, 'users'), orderBy('rating', 'desc'), limit(n * 3)))
+  return snap.docs.map(d => ({ uid: d.id, ...(d.data() as { name?: string; rating?: number; rd?: number; games?: number; guest?: boolean; wins?: number; losses?: number; draws?: number }) }))
+    .filter(u => !u.guest && (u.games ?? 0) > 0).slice(0, n)
+    .map(u => ({ uid: u.uid, name: u.name ?? '이름 없음', rating: Math.round(u.rating ?? 1500), games: u.games ?? 0, wins: u.wins ?? 0, losses: u.losses ?? 0, draws: u.draws ?? 0, provisional: (u.rd ?? 350) > 110 }))
 }
 
 export async function rename(p: Profile, name: string): Promise<Profile> {

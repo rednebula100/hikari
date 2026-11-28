@@ -13,7 +13,7 @@ const config = {
 export const accountsConfigured = () => !!(config.apiKey && config.authDomain && config.projectId && config.appId)
 
 /** What the rest of the game needs to know about the signed-in player. */
-export interface Profile { uid: string; name: string; guest: boolean; rating: number; games: number }
+export interface Profile { uid: string; name: string; guest: boolean; rating: number; games: number; provisional: boolean }
 type Listener = (p: Profile | null) => void
 
 let sdk: Promise<typeof import('./firebase-sdk')> | null = null
@@ -41,5 +41,8 @@ export async function signInGoogle() { const m = await load(); await m.signInGoo
 export async function signInGuest() { const m = await load(); await m.signInGuest() }
 export async function signOut() { const m = await load(); await m.signOut() }
 export async function rename(name: string) { const m = await load(); if (current) current = await m.rename(current, name); listeners.forEach(f => f(current)) }
+export async function leaderboard() { return accountsConfigured() ? (await load()).leaderboard() : [] }
+/** Re-reads the profile (after a ranked game the server has changed the rating). */
+export async function refreshProfile() { const m = await load(); const u = m.currentUser(); if (u) { current = await m.ensureProfile(u); listeners.forEach(f => f(current)) } }
 /** A fresh ID token for the game server (null when signed out or not configured). */
 export async function idToken(): Promise<string | null> { if (!accountsConfigured() || !current) return null; return (await load()).idToken() }

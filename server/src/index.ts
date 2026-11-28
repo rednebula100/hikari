@@ -6,7 +6,8 @@
 import { Server, matchMaker } from '@colyseus/core'
 import { WebSocketTransport } from '@colyseus/ws-transport'
 import { LobbyRoom, VERSION } from './lobby.ts'
-import { firebase } from './firebase.ts'
+import { firebase, DEV_RANKED } from './firebase.ts'
+import { MatchRoom } from './match.ts'
 // the rules engine is shared with the client — ranked games will be validated with exactly this code
 import { fromFen, legal, START } from '../../src/engine/rules.ts'
 
@@ -45,5 +46,6 @@ const server = new Server({
 })
 
 server.define('lobby', LobbyRoom)
+server.define('match', MatchRoom)
 await server.listen(PORT, '0.0.0.0')
-console.log(`shou server ${VERSION} listening on :${PORT} (engine ok: ${openingMoves} opening moves; origins: ${ALLOWED.join(' ') || 'any'}; firebase: ${firebase ? firebase.projectId : 'off'})`)
+console.log(`shou server ${VERSION} listening on :${PORT} (engine ok: ${openingMoves} opening moves; origins: ${ALLOWED.join(' ') || 'any'}; firebase: ${firebase ? firebase.projectId : DEV_RANKED ? 'off (RANKED_DEV: memory ratings)' : 'off'})`)

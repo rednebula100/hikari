@@ -14,8 +14,12 @@ export class ChessClock {
     this.left = { w: baseMs, b: baseMs }
   }
 
-  /** Starts (or resumes) the side to move's clock. */
-  start(now: number) { if (this.since === null && !this.flagged) this.since = now }
+  /** Starts (or resumes) the side to move's clock at `at` (may be in the future: a grace period before it runs). */
+  start(at: number) { if (this.since === null && !this.flagged) this.since = at }
+  /** Stops without charging anything more (the move was already settled by press). */
+  hold() { this.since = null }
+  get running() { return this.since !== null && !this.flagged }
+  get toMove() { return this.turn }
   /** Stops both clocks (disconnect grace, adjudication). */
   pause(now: number) { this.settle(now); this.since = null }
 
@@ -32,7 +36,7 @@ export class ChessClock {
 
   /** Remaining time at `now` (does not mutate). */
   remaining(side: Side, now: number): number {
-    const run = this.since !== null && side === this.turn && !this.flagged ? now - this.since : 0
+    const run = this.since !== null && side === this.turn && !this.flagged ? Math.max(0, now - this.since) : 0
     return Math.max(0, this.left[side] - run)
   }
 
@@ -45,8 +49,8 @@ export class ChessClock {
 
   private settle(now: number) {
     if (this.since === null || this.flagged) return
-    const side = this.turn, spent = now - this.since
-    this.left[side] -= spent; this.since = now
+    const side = this.turn, spent = Math.max(0, now - this.since)
+    this.left[side] -= spent; this.since = Math.max(now, this.since)
     if (this.left[side] <= 0) { this.left[side] = 0; this.flagged = side; this.since = null }
   }
 }
