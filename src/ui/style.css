@@ -392,3 +392,8 @@ button:disabled{cursor:default;opacity:.4}
 .rk-h .tag{font:500 11px var(--serif);letter-spacing:.08em;padding:2px 8px;border:1px solid var(--brass);color:var(--brass)}
 .ranked p{margin:8px 0 12px;font:400 13px/1.6 var(--serif);color:var(--muted)}
 .ranked p b{color:var(--ivory);font-weight:500}
+.acct{display:grid;gap:6px;padding:12px 0 14px;margin-bottom:12px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.acct small{font:400 13px/1.5 var(--serif);color:var(--muted)}
+.acct .who b{display:block;font:600 16px var(--serif);color:var(--ivory)}
+.acct .acts2{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.acct input{flex:1;min-width:120px;height:30px;padding:0 10px;background:rgba(0,0,0,.25);border:1px solid var(--line2);color:var(--ivory);font:400 14px var(--serif);outline:0}

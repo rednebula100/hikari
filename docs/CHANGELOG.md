@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.1 — shou, accounts groundwork (2026-11-28)
+- Project renamed **shou** (衝): spec `SHOU-MASTER-SPEC.md`, packages, save keys `shou:*` (old `chung:*` saves are
+  carried over automatically). The GitHub repository keeps the name `hikari` (submitted link).
+- Opening the server URL in a browser now redirects to the game instead of showing a bare text line.
+- **Firebase Auth + Firestore groundwork:** Google / guest sign-in in the 온라인 panel, `users/{uid}` profiles,
+  `firestore.rules` (clients can only set their own name; ratings are server-only), server verifies ID tokens with
+  firebase-admin (`FIREBASE_SERVICE_ACCOUNT`). CI passes `FIREBASE_*` repository variables to the build.
+
 ## 0.8.0 — collapse & online groundwork (2026-11-28)
 - **Fun review (bot self-play):** draws were 80–90%. New 衝 rules — **collapse** (rings fall at moves 30 · 44 · 58 with
   everything on them) and **stalemate = loss** — bring decisive games to 90–100% at ~45 moves. Taught in the tutorial

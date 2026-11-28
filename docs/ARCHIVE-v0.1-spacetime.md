@@ -1,6 +1,6 @@
 # 衝 — 보관 문서: v0.1–v0.3 연속 시공간 모델과 검증 계약
 
-> 2026-11-28 정리: 이 내용은 현재 게임(衝 v0.4+)의 규칙이 아니다. 초기 기획(연속 시공간 전략, NEXUS·패킷 검증 계약)과 탐구용 물리 참고를 원문 그대로 보관한다. 현재 정본은 `HIKARI-MASTER-SPEC.md`.
+> 2026-11-28 정리: 이 내용은 현재 게임(衝 v0.4+)의 규칙이 아니다. 초기 기획(연속 시공간 전략, NEXUS·패킷 검증 계약)과 탐구용 물리 참고를 원문 그대로 보관한다. 현재 정본은 `SHOU-MASTER-SPEC.md`.
 
 # PART IV — PHYSICS REFERENCE (연속 시공간 모델 — 연구·LAB 참고용)
 
@@ -185,7 +185,7 @@ PHASER가 `(6,4)`에서 `t=2`, 발신 진폭 2/3, 위상 180°의 펄스를 보�
 ```
 hikari/
   README.md
-  HIKARI-MASTER-SPEC.md
+  SHOU-MASTER-SPEC.md
   package.json
   src/
     app/                  # 메뉴, 라우팅, 게임 화면 연결

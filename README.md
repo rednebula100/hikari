@@ -1,4 +1,4 @@
-# 衝
+# 衝 — shou
 
 > 잡지 마라. 부딪쳐라.
 
@@ -24,7 +24,7 @@ Hover a target before you commit: the engine's exact result is sketched in chalk
 
 ## Direction
 A night physics lab: one incandescent lamp, chalk on the board, a stroboscope that photographs every collision,
-a blackboard that writes up the match. See `HIKARI-MASTER-SPEC.md` Part II.
+a blackboard that writes up the match. See `SHOU-MASTER-SPEC.md` Part II.
 
 ## Develop
 ```

@@ -1,6 +1,8 @@
 // Online groundwork: wake the Render server, join the lobby, measure latency and the server-clock offset.
 // The Colyseus SDK is loaded lazily, so offline players never download it.
 // The server URL comes from VITE_SERVER_URL at build time (GitHub Actions variable SERVER_URL).
+import { idToken } from './account'
+
 export const SERVER_URL = ((import.meta.env.VITE_SERVER_URL as string | undefined) ?? '').replace(/\/+$/, '')
 export const configured = () => !!SERVER_URL
 
@@ -8,7 +10,7 @@ export type NetState =
   | { s: 'off' }                                   // no server configured in this build
   | { s: 'waking'; tries: number; since: number } // free Render instances sleep after 15 idle minutes
   | { s: 'joining' }
-  | { s: 'online'; online: number; ping: number; offset: number; version: string }
+  | { s: 'online'; online: number; signed: number; ping: number; offset: number; version: string; you: { name: string; guest: boolean; uid: string | null } }
   | { s: 'error'; message: string }
 
 type Listener = (st: NetState) => void
@@ -47,11 +49,13 @@ export async function connect() {
     emit({ s: 'joining' })
     const { Client } = await import('@colyseus/sdk')
     const client = new Client(SERVER_URL)
-    const r = await client.joinOrCreate('lobby')
+    // the server verifies the Firebase ID token itself; without one we join as a guest
+    const r = await client.joinOrCreate('lobby', { token: await idToken().catch(() => null) })
     room = r
-    let online = 0, ping = 0, offset = 0
-    const show = () => emit({ s: 'online', online, ping, offset, version: health.version })
-    r.onMessage('presence', (m: { online: number }) => { online = m.online; show() })
+    let online = 0, signed = 0, ping = 0, offset = 0, you = { name: '손님', guest: true, uid: null as string | null }
+    const show = () => emit({ s: 'online', online, signed, ping, offset, version: health.version, you })
+    r.onMessage('presence', (m: { online: number; signed?: number }) => { online = m.online; signed = m.signed ?? 0; show() })
+    r.onMessage('welcome', (m: { you?: typeof you }) => { if (m.you) you = m.you; show() })
     r.onMessage('pong', (m: { t: number; server: number }) => {
       const now = performance.now(), rtt = now - m.t
       ping = Math.round(rtt)

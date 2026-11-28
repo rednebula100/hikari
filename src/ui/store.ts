@@ -1,11 +1,19 @@
-// Local persistence (versioned keys under chung:*). Every access survives private mode / quota errors.
+// Local persistence (versioned keys under shou:*). Every access survives private mode / quota errors.
 import type { Quality } from '../render/stage'
 
-const get = (k: string) => { try { return localStorage.getItem('chung:' + k) } catch { return null } }
-const set = (k: string, v: string) => { try { localStorage.setItem('chung:' + k, v) } catch { /* private mode or full */ } }
+// The project was renamed 衝 "chung" → "shou": carry old saves over once (progress, settings, looks).
+try {
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const k = localStorage.key(i)
+    if (k?.startsWith('chung:') && localStorage.getItem('shou:' + k.slice(6)) === null) localStorage.setItem('shou:' + k.slice(6), localStorage.getItem(k)!)
+  }
+} catch { /* storage unavailable */ }
+
+const get = (k: string) => { try { return localStorage.getItem('shou:' + k) } catch { return null } }
+const set = (k: string, v: string) => { try { localStorage.setItem('shou:' + k, v) } catch { /* private mode or full */ } }
 function json<T>(k: string, fallback: T): T { try { const v = get(k); return v ? { ...fallback, ...JSON.parse(v) } : fallback } catch { return fallback } }
 
-export const store = { get, set, del(k: string) { try { localStorage.removeItem('chung:' + k) } catch { /* */ } } }
+export const store = { get, set, del(k: string) { try { localStorage.removeItem('shou:' + k) } catch { /* */ } } }
 
 // ── settings ─────────────────────────────────────────────────────────────
 export interface Settings { quality: Quality; fps: boolean; muted: boolean; volume: number; aim: boolean; intro: 'always' | 'first' }
@@ -31,7 +39,7 @@ export interface CRec { t: number; n: number; img?: string; where?: string }
 export type CodexState = Record<string, CRec>
 export const loadCodex = (): CodexState => json<CodexState>('v1:codex', {})
 export function saveCodex(c: CodexState) {
-  try { localStorage.setItem('chung:v1:codex', JSON.stringify(c)) }
+  try { localStorage.setItem('shou:v1:codex', JSON.stringify(c)) }
   catch { // out of space: drop the oldest photographs first
     const ids = Object.keys(c).filter(k => c[k].img).sort((a, b) => c[a].t - c[b].t)
     for (const id of ids.slice(0, Math.ceil(ids.length / 3))) delete c[id].img

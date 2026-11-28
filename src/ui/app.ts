@@ -13,6 +13,7 @@ import { Loader } from './loader';
 import { WORLDS, TIER_WORLD, type WorldId } from '../render/worlds';
 import { DEFAULT_LOOK, NAMES, PART_NAMES, FACTORY, type Look, type Part, type MatSpec } from '../render/looks';
 import { colorPicker } from './picker';
+import { accountsConfigured, onAccount, signInGoogle, signInGuest, signOut as accountSignOut, rename as accountRename, type Profile } from '../online/account';
 import { configured as netConfigured, connect as netConnect, disconnect as netDisconnect, onNet, netState, type NetState } from '../online/net';
 import { intro } from './intro';
 import { ENTRIES, GROUPS, RARITY, byId, detect, newTally, type GameTally } from '../content/codex';
@@ -283,7 +284,7 @@ function credits() {
     + '<p><b>서체</b> — Hahmlet · Nanum Pen Script (SIL OFL 1.1).</p>'
     + '<p><b>범선</b> — Poly Haven 「Ship Pinnace」 (CC0).</p>'
     + '<p><b>바다·구름</b> — FFT 바다: dli/waves © David Li (MIT) 이식 · 볼류메트릭 구름·대기: takram three-geospatial (MIT) · postprocessing (Zlib).</p>'
-    + '<p><b>라이브러리</b> — three.js (MIT), Rapier 물리 (Apache-2.0), GSAP (GreenSock 표준 라이선스, 무료), Draco & Basis Universal 디코더 (Apache-2.0). 온라인 — Colyseus (MIT). 규칙 검증 — chess.js (BSD-2).</p>'
+    + '<p><b>라이브러리</b> — three.js (MIT), Rapier 물리 (Apache-2.0), GSAP (GreenSock 표준 라이선스, 무료), Draco & Basis Universal 디코더 (Apache-2.0). 온라인 — Colyseus (MIT), Firebase (Apache-2.0). 규칙 검증 — chess.js (BSD-2).</p>'
     + '<p><b>소리</b> — 전부 실시간 합성.</p></div><div class="acts"><button class="btn" id="c-back">돌아가기 <span class="k">Esc</span></button></div></div></div>';
   openPanel($('screen').firstElementChild!);
   $('c-back').onclick = back;
@@ -1057,7 +1058,7 @@ let netOff: (() => void) | null = null;
 function openOnline() {
   $('screen').className = 'dim';
   $('screen').innerHTML = '<div class="panel dlg online"><div class="ph"><span class="lbl">온라인</span></div><div class="pb">'
-    + '<div class="net" id="net"></div>'
+    + '<div class="net" id="net"></div><div class="acct" id="acct"></div>'
     + '<div class="ranked"><div class="rk-h"><b>랭킹전</b><span class="tag">준비 중</span></div>'
     + '<p>서버가 판정하는 衝 대국. 체스 시계 — <b>3+2</b> · <b>5+3</b> · <b>10+5</b> (피셔 증초). 레이팅과 기록은 다음 버전에서 열립니다.</p>'
     + '<button class="btn" disabled>대전 찾기</button></div>'
@@ -1069,15 +1070,36 @@ function openOnline() {
     if (st.s === 'off') el.innerHTML = dot('off') + '<div><b>서버가 설정되지 않은 빌드</b><small>배포 때 VITE_SERVER_URL(저장소 변수 SERVER_URL)을 넣으면 켜집니다.</small></div>';
     else if (st.s === 'waking') el.innerHTML = dot('wait') + '<div><b>서버를 깨우는 중 · ' + Math.round((performance.now() - st.since) / 1000) + '초</b><small>무료 서버는 15분 동안 아무도 없으면 잠듭니다. 처음 깨울 때 최대 1분쯤 걸립니다.</small></div>';
     else if (st.s === 'joining') el.innerHTML = dot('wait') + '<div><b>로비에 들어가는 중…</b><small>WebSocket 연결</small></div>';
-    else if (st.s === 'online') el.innerHTML = dot('on') + '<div><b>연결됨</b><small>서버 v' + st.version + '</small></div>'
-      + '<dl><div><dt>접속</dt><dd>' + st.online + '<span>명</span></dd></div><div><dt>핑</dt><dd>' + st.ping + '<span>ms</span></dd></div><div><dt>시계 차</dt><dd>' + (st.offset > 0 ? '+' : '') + st.offset + '<span>ms</span></dd></div></dl>';
+    else if (st.s === 'online') el.innerHTML = dot('on') + '<div><b>연결됨 · ' + esc(st.you.name) + (st.you.uid && !st.you.guest ? ' (인증됨)' : st.you.uid ? ' (손님 인증)' : '') + '</b><small>서버 v' + st.version + '</small></div>'
+      + '<dl><div><dt>접속</dt><dd>' + st.online + '<span>명</span></dd></div><div><dt>로그인</dt><dd>' + st.signed + '<span>명</span></dd></div><div><dt>핑</dt><dd>' + st.ping + '<span>ms</span></dd></div><div><dt>시계 차</dt><dd>' + (st.offset > 0 ? '+' : '') + st.offset + '<span>ms</span></dd></div></dl>';
     else el.innerHTML = dot('err') + '<div><b>연결 실패</b><small>' + st.message + '</small></div>';
   };
   netOff?.(); netOff = onNet(view);
+  // account (Firebase Auth): Google or guest; the server verifies the token when the lobby is joined
+  const acct = (p: Profile | null) => {
+    const el = document.getElementById('acct'); if (!el) return;
+    // a remembered sign-in can resolve after the lobby was joined as a guest: rejoin with the token
+    const ns = netState(); if (p && ns.s === 'online' && !ns.you.uid) void netDisconnect().then(() => netConnect());
+    if (!accountsConfigured()) { el.innerHTML = '<span class="lbl">계정</span><small>이 빌드에는 Firebase 설정이 없습니다 (FIREBASE_* 변수).</small>'; return; }
+    el.innerHTML = p
+      ? '<span class="lbl">계정</span><div class="who"><b>' + esc(p.name) + '</b><small>' + (p.guest ? '손님 계정 · 이 기기에만 남음' : 'Google 계정') + ' · 레이팅 ' + p.rating + ' · ' + p.games + '판</small></div>'
+        + '<div class="acts2"><input id="a-name" maxlength="16" placeholder="이름 바꾸기"><button class="btn sm" id="a-ren">바꾸기</button>' + (p.guest ? '<button class="btn sm" id="a-google">Google로 저장</button>' : '') + '<button class="btn sm" id="a-out">로그아웃</button></div>'
+      : '<span class="lbl">계정</span><small>랭킹전 기록은 계정에 남습니다.</small><div class="acts2"><button class="btn sm" id="a-google">Google로 로그인</button><button class="btn sm" id="a-guest">손님으로 시작</button></div>';
+    const fail = (e: unknown) => toast('로그인 실패 — ' + ((e as { code?: string }).code ?? String(e)));
+    const rejoin = async () => { await netDisconnect(); void netConnect(); };
+    document.getElementById('a-google')?.addEventListener('click', () => { sound.tick(); signInGoogle().then(rejoin, fail); });
+    document.getElementById('a-guest')?.addEventListener('click', () => { sound.tick(); signInGuest().then(rejoin, fail); });
+    document.getElementById('a-out')?.addEventListener('click', () => { sound.tick(); accountSignOut().then(rejoin, fail); });
+    const nameIn = document.getElementById('a-name') as HTMLInputElement | null;
+    const doRename = () => { if (nameIn?.value.trim()) accountRename(nameIn.value).then(() => toast('이름을 바꿨습니다'), fail); };
+    document.getElementById('a-ren')?.addEventListener('click', doRename);
+    nameIn?.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') doRename(); });
+  };
+  const acctOff = onAccount(acct);
   const tick = window.setInterval(() => { const el = document.getElementById('net'); if (!el) { clearInterval(tick); return; } if (netState().s === 'waking') view(netState()); }, 1000);
   void netConnect();
   $('n-retry').onclick = async () => { sound.tick(); await netDisconnect(); void netConnect(); };
-  $('n-back').onclick = () => { netOff?.(); netOff = null; void netDisconnect(); showTitleMenu(true); };
+  $('n-back').onclick = () => { acctOff(); netOff?.(); netOff = null; void netDisconnect(); showTitleMenu(true); };
 }
 
 // ── settings ─────────────────────────────────────────────────────────────
@@ -1201,7 +1223,7 @@ stage.onHover = onHover;
 buildLogo();
 void boot();
 
-if (import.meta.env.DEV) Object.assign(window, { chung: {
+if (import.meta.env.DEV) Object.assign(window, { shou: {
   stage, get pos() { return pos; }, newGame, experiment, controls, title, commit, onSquare, openBook, openCodex, openPuzzle, PUZZLES, register,
   click: (s: string) => onSquare(parse(s), 0), hover: (s: string) => onHover(parse(s)),
   pick: (o: number) => (document.querySelector('[data-o="' + o + '"]') as HTMLButtonElement)?.click(),

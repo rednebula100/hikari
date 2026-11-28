@@ -7,7 +7,7 @@
 |---|---|
 | 게임 제목 | **衝** (충돌 衝突의 衝 · 요충 要衝). 워드마크는 한자 한 글자 |
 | 고급 모드 | **光** — 빛의 속도로 지연된 관측을 衝 위에 얹는 선택 모드 |
-| 기술 식별자 | HIKARI (저장소·파일명) · 데모 https://rednebula100.github.io/hikari/ |
+| 기술 식별자 | **shou** (프로젝트·패키지·파일명·저장 키 `shou:*`, Render Blueprint `shou`). GitHub 저장소 이름은 제출한 링크 때문에 `hikari` 유지 → 데모 https://rednebula100.github.io/hikari/ |
 | 문서 버전 | **v0.8.0 — Collapse & Online Groundwork** (2026-11-28) |
 | 장르 | 충돌 체스 — FIDE 이동 + 상대론적 1차원 탄성 충돌 + 링아웃 + 기물 고유 능력 |
 | 플랫폼 | 데스크톱 웹, 마우스·키보드, 고정 뷰포트(페이지 스크롤 없음) |
@@ -160,9 +160,9 @@
 
 ## 14. 꾸미기 (v0.7 → v0.8 상세 편집기)
 **v0.8 상세 편집기:** 프리셋(기본 4종 + 사용자 저장) 위에서 각 부위를 자유롭게 조정. 부위: 백 기물 · 흑 기물 · 밝은 칸 · 어두운 칸 · 보드 테두리 · 테이블. 각 부위 = 색 + 불투명도 + 재질(거칠기 roughness · 금속 metalness · 유리 transmission · 코팅 clearcoat). 원본 텍스처는 유지하고 색은 곱해진다(텍스처가 있는 재질의 수치는 계수). 드래그 중에는 재질만 갱신(재생성 없음). 기물 형태(원본 glTF / 선반 세트)는 별도 선택(원본 형태에도 색·재질 덮어쓰기 가능).
-**색 고르기(전문 도구 수준, 자작 `src/ui/picker.ts`):** 색상 고리 + 안쪽 채도·명도 **마름모**(위 흰색 · 오른쪽 순색 · 아래·왼쪽 검정) · R/G/B 슬라이더(±버튼) · 불투명도 · HEX 입력 · 이전/현재 색 비교 견본. 실시간 미리보기, 프리셋 이름 붙여 저장/삭제(`chung:v1:presets`, 최대 12) + 기본 프리셋 3종(청자와 흑유 · 붉은 유리 · 은과 묵). 색을 바꾼 칸은 64칸 타일로 그려지며, 타일은 **각 칸의 네 모서리에서 보드 UV를 직접 샘플링**한다(보드 UV가 한 장의 선형 시트가 아니어서 선형 외삽 시 칸이 어긋났음 — 지면 파동 타일도 함께 수정).
+**색 고르기(전문 도구 수준, 자작 `src/ui/picker.ts`):** 색상 고리 + 안쪽 채도·명도 **마름모**(위 흰색 · 오른쪽 순색 · 아래·왼쪽 검정) · R/G/B 슬라이더(±버튼) · 불투명도 · HEX 입력 · 이전/현재 색 비교 견본. 실시간 미리보기, 프리셋 이름 붙여 저장/삭제(`shou:v1:presets`, 최대 12) + 기본 프리셋 3종(청자와 흑유 · 붉은 유리 · 은과 묵). 색을 바꾼 칸은 64칸 타일로 그려지며, 타일은 **각 칸의 네 모서리에서 보드 UV를 직접 샘플링**한다(보드 UV가 한 장의 선형 시트가 아니어서 선형 외삽 시 칸이 어긋났음 — 지면 파동 타일도 함께 수정).
 
-화면 오른쪽 패널, 왼쪽은 실시간 미리보기(보드가 보인다). 선택은 즉시 적용·저장(`chung:v1:look`). 실험실 월드에 적용(다른 월드는 자기 바닥을 쓴다; 보드·기물은 모든 월드 공통).
+화면 오른쪽 패널, 왼쪽은 실시간 미리보기(보드가 보인다). 선택은 즉시 적용·저장(`shou:v1:look`). 실험실 월드에 적용(다른 월드는 자기 바닥을 쓴다; 보드·기물은 모든 월드 공통).
 
 | 항목 | 선택지 | 구현 |
 |---|---|---|
@@ -225,7 +225,12 @@
 - **배포:** 저장소 루트 `render.yaml`(Blueprint) — free 플랜, 싱가포르 리전, `cd server && npm ci` / `npm start`, 헬스 체크 `/healthz`, `NODE_VERSION=22`, `ALLOWED_ORIGINS`(Pages 주소 + 로컬), buildFilter(server·engine 변경 때만 재배포). CI(Pages 워크플로)는 서버 타입 검사·테스트도 돌린다.
 - **무료 플랜 특성:** 15분 무활동 시 잠듦(웹소켓 메시지는 활동으로 인정), 깨어날 때 ~1분 → 클라이언트는 「서버 깨우는 중」 표시 후 재시도.
 - **클라이언트:** `src/online/` — 서버 주소는 빌드 변수 `VITE_SERVER_URL`(GitHub Actions 저장소 변수 `SERVER_URL`), 타이틀 메뉴 「온라인」 → 연결 상태 패널(깨우기·접속자 수·핑). `@colyseus/sdk`는 이 화면에서만 지연 로드(별도 청크). 패널을 닫으면 로비를 떠난다(무료 인스턴스가 다시 잘 수 있게). 랭킹전 카드는 「준비 중」으로 자리만.
-- **랭킹전 예정 설계 메모:** FIDE식 시계(증초 포함), 서버 권위 시계, 연결 끊김 유예, Glicko-2 레이팅, DB는 별도(Render Postgres 무료는 만료가 있어 Neon/Supabase 검토).
+- **서버 주소 직접 방문:** `GET /`는 게임(`GAME_URL`, Pages)으로 302 이동 — 서버엔 화면이 없다(v0.8.1, 「검은 화면에 서버 문구만」 혼동 수정).
+- **계정·DB(v0.8.1, 기반만): Firebase Auth + Firestore.**
+  - 클라이언트 `src/online/account.ts`(+ 지연 청크 `firebase-sdk.ts`): Google 로그인(팝업) · 손님(익명) · 로그아웃 · 이름 바꾸기. 손님이 Google로 저장하면 같은 uid로 연결(linkWithPopup). 설정은 빌드 변수 `VITE_FIREBASE_API_KEY/AUTH_DOMAIN/PROJECT_ID/APP_ID`(저장소 변수 `FIREBASE_*`) — 웹 설정은 공개값이며 보안은 규칙과 서버 검증에 있다.
+  - Firestore: `users/{uid}` = {name, createdAt} + 서버만 쓰는 {rating, rd, games}. `matches/{id}` 서버 전용 기록. 규칙 `firestore.rules`: 프로필은 공개 읽기, 본인은 생성(name·createdAt만)과 이름 변경만, 나머지 쓰기 금지. 서버는 Admin SDK로 규칙을 우회해 레이팅을 쓴다 → 클라이언트가 점수를 조작할 수 없다.
+  - 서버 `server/src/firebase.ts`: `FIREBASE_SERVICE_ACCOUNT`(서비스 계정 JSON, Render 비밀 변수) → 로비 `onAuth`가 ID 토큰을 검증하고 이름은 Firestore에서 읽는다(클라이언트가 보낸 이름은 믿지 않음). 없으면 모두 손님. `/healthz`의 `firebase`에 프로젝트 ID 표시.
+- **랭킹전 예정 설계 메모:** FIDE식 시계(증초 포함), 서버 권위 시계, 연결 끊김 유예, Glicko-2 레이팅, DB는 Firestore(위).
 
 # PART V — 아키텍처·성능·검증
 
@@ -239,7 +244,7 @@ src/ui/       app.ts style.css fx.ts(GSAP) intro.ts loader.ts store.ts audio.ts
 tools/        gen-puzzles.ts bench.ts clash-stats.ts
 tests/        rules(perft·chess.js 오라클) clash physics fog lessons puzzles codex abilities(v0.7)
 ```
-- 저장: `chung:v1:*`(설정·문제집·도감·도장·꾸미기), 손상 시 기본값.
+- 저장: `shou:v1:*`(설정·문제집·도감·도장·꾸미기), 손상 시 기본값.
 - 배포: GitHub Actions → Pages.
 
 ## 21. 성능 계약

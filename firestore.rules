@@ -1,0 +1,34 @@
+rules_version = '2';
+// shou (衝) — Firestore security rules.
+// Clients may only create their own profile and change its display name. Ratings, game counts and match
+// records are written by the game server through the Admin SDK (which bypasses these rules), so a client can
+// never award itself rating points.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+    function validName(n) { return n is string && n.size() >= 1 && n.size() <= 16; }
+
+    match /users/{uid} {
+      allow read: if true;   // public profiles (leaderboard later)
+      allow create: if isOwner(uid)
+        && request.resource.data.keys().hasOnly(['name', 'createdAt'])
+        && validName(request.resource.data.name)
+        && request.resource.data.createdAt == request.time;
+      allow update: if isOwner(uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name'])
+        && validName(request.resource.data.name);
+      allow delete: if false;
+    }
+
+    // finished games (server-written): readable for history and replays
+    match /matches/{id} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -69,7 +69,7 @@ The continuous physics module remains in `src/lab/` for the research track (spec
 # v0.2 decisions (archived)
 
 
-Changes against `HIKARI-MASTER-SPEC.md` v0.1.x, with reasons. Every rule below is
+Changes against `SHOU-MASTER-SPEC.md` v0.1.x, with reasons. Every rule below is
 implemented in `src/game/` and covered by `tests/`.
 
 ## D1. Observation = the past light cone (replaces 1 s telemetry sampling, §9.1–9.2)

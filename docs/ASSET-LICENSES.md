@@ -20,3 +20,4 @@ All sounds are synthesized at runtime. No GPL code is used.
 | postprocessing (pmndrs) | cloud world composer | Zlib |
 | Poly Haven "Ship Pinnace" (`public/assets/pinnace.glb`, Draco + WebP build) | sea world ship | CC0 |
 | @colyseus/sdk (client, lazy), @colyseus/core + @colyseus/ws-transport (server) | online groundwork | MIT |
+| firebase (web SDK, lazy), firebase-admin (server) | accounts and database | Apache-2.0 |
