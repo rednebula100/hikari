@@ -183,8 +183,28 @@ const take = (pool: Puzzle[], n: number, pred: (p: Puzzle) => boolean, by: 'asc'
   xs.forEach(p => used.add(p.fen)); return xs
 }
 const pieces = (p: Puzzle) => fromFen(p.fen).board.filter(Boolean).length
+// ★1 — 기물 그림: pictures drawn in pieces, each with one playful goal (solved exhaustively like the rest)
+const sq2 = (n: string) => (Number(n[1]) - 1) * 8 + n.charCodeAt(0) - 97
+const ART: { title: string; text: string; fen: string; goal: Goal }[] = [
+  { title: '웃는 얼굴', text: '나이트로 코를 짓밟아라', fen: '8/4N3/2p2p2/3p4/1p4p1/2pppp2/8/8 w - - 0 1', goal: { type: 'target', squares: [sq2('d5')] } },
+  { title: '윙크', text: '한쪽 눈을 감게 하라 — 눈 하나만 떨어뜨리기', fen: '8/4N3/2p2p2/3p4/1p4p1/2pppp2/8/8 w - - 0 1', goal: { type: 'target', squares: [sq2('c6')] } },
+  { title: '하트', text: '하트의 왼쪽 볼록을 날려라', fen: '8/1pp1pp2/p2p2p1/p5p1/1p3p2/2p1p3/3p4/R7 w - - 0 1', goal: { type: 'target', squares: [sq2('a6')] } },
+  { title: '눈사람', text: '눈사람의 모자를 벗겨라', fen: '8/3q4/3p4/2pbp3/3r4/2prp3/8/3Q4 w - - 0 1', goal: { type: 'target', squares: [sq2('d7')] } },
+  { title: '기차', text: '마지막 칸만 떼어내라', fen: '8/8/8/8/8/8/R2rrrr1/8 w - - 0 1', goal: { type: 'target', squares: [sq2('g2')] } },
+  { title: '요람', text: '맨 끝의 퀸만 떨어뜨려라', fen: '8/8/8/8/Q2qqqq1/8/8/8 w - - 0 1', goal: { type: 'target', squares: [sq2('g4')] } },
+  { title: '피라미드', text: '꼭대기 돌을 하늘로', fen: '8/8/4p3/3ppp2/2ppppp1/8/8/4R3 w - - 0 1', goal: { type: 'target', squares: [sq2('e6')] } },
+  { title: '고양이', text: '고양이 입꼬리를 짓밟아라', fen: '8/2n2n2/2pppp2/2b2b2/3pp3/8/4N3/8 w - - 0 1', goal: { type: 'target', squares: [sq2('d4')] } },
+  { title: '과녁', text: '과녁의 맨 윗고리를 맞혀라', fen: '8/8/3ppp2/3ppp2/3ppp2/8/8/4R3 w - - 0 1', goal: { type: 'target', squares: [sq2('e6')] } },
+  { title: '로켓', text: '발사! 로켓 끝 두 칸을 우주로', fen: '3p4/3r4/3r4/3r4/2b1b3/8/8/3R4 w - - 0 1', goal: { type: 'drop', n: 2 } },
+]
+const artBook: Puzzle[] = ART.map(a => {
+  const r = solveTarget(a.fen, 1, a.goal)
+  if (!r.solutions) throw new Error('art puzzle unsolvable: ' + a.title)
+  return { id: 0, tier: 1, fen: a.fen, depth: 1, goal: a.goal, solution: r.solution!, total: r.total, solutions: r.solutions, score: 1, seals: [], title: a.title, text: a.text }
+})
 const tiers: Puzzle[][] = []
-tiers[1] = take(d1, 10, p => p.solutions <= 3 && pieces(p) <= 6 && p.goal.type === 'drop' && !p.goal.keep && p.goal.n <= 2, 'asc')
+tiers[1] = artBook
+void take(d1, 10, p => p.solutions <= 3 && pieces(p) <= 6 && p.goal.type === 'drop' && !p.goal.keep && p.goal.n <= 2, 'asc')
 tiers[2] = take(d1, 10, p => p.solutions <= 2 && p.total >= 12 && (p.goal.type === 'target' || (p.goal.type === 'drop' && p.goal.n >= 2)), 'asc')
 tiers[4] = take(d1, 10, p => !!p.newton && p.solutions <= 2, 'desc')
 tiers[3] = take(d1, 10, p => p.solutions <= 2 && (p.chain ?? 0) >= 2 && p.total >= 18, 'asc')
@@ -196,11 +216,11 @@ tiers[9] = [...take(d3, 5, () => true, 'asc'), ...take(m2, 5, () => true, 'asc')
 tiers[10] = [...take(d3, 5, () => true, 'desc'), ...take(m2, 5, () => true, 'desc')]
 // top up any short tier from the nearest pool so the book always has 100 problems
 const pools = [d1, d1, d1, d1, d1, d1, d2, d2, m1, d3, d3]
-for (let t = 1; t <= 10; t++) if (tiers[t].length < 10) tiers[t].push(...take(pools[t], 10 - tiers[t].length, () => true, t >= 5 ? 'desc' : 'asc'))
+for (let t = 2; t <= 10; t++) if (tiers[t].length < 10) tiers[t].push(...take(pools[t], 10 - tiers[t].length, () => true, t >= 5 ? 'desc' : 'asc'))
 
 const book: Puzzle[] = []
 for (let t = 1; t <= 10; t++) {
-  tiers[t].sort((a, b) => a.score - b.score)
+  if (t > 1) tiers[t].sort((a, b) => a.score - b.score)
   for (const p of tiers[t]) book.push({ ...p, id: book.length + 1, tier: t, seals: sealsFor(t, p.depth, p.goal.type === 'mate') })
 }
 writeFileSync(new URL('../src/content/puzzles.json', import.meta.url), JSON.stringify(book, null, 0).replace(/\},\{/g, '},\n{'))

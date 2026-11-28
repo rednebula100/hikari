@@ -45,13 +45,13 @@ export class Debris {
   get active() { return this.live.some(t => !t.body.isSleeping()); }
 
   /** Hand a piece to the physics world with a velocity (world units/s) and a little spin. */
-  throw(obj: T.Object3D, hull: Float32Array, vel: T.Vector3, mass: number) {
+  throw(obj: T.Object3D, hull: Float32Array, vel: T.Vector3, mass: number, spin = true) {
     const R = this.R, w = this.world; if (!R || !w) return false;
     const q = obj.quaternion;
     const body = w.createRigidBody(R.RigidBodyDesc.dynamic()
-      .setTranslation(obj.position.x, obj.position.y + .01, obj.position.z).setRotation({ x: q.x, y: q.y, z: q.z, w: q.w })
+      .setTranslation(obj.position.x, obj.position.y + (spin ? .01 : .002), obj.position.z).setRotation({ x: q.x, y: q.y, z: q.z, w: q.w })
       .setLinvel(vel.x, vel.y, vel.z)
-      .setAngvel({ x: vel.z * 1.6 + (Math.random() - .5), y: (Math.random() - .5) * 3, z: -vel.x * 1.6 + (Math.random() - .5) })
+      .setAngvel(spin ? { x: vel.z * 1.6 + (Math.random() - .5), y: (Math.random() - .5) * 3, z: -vel.x * 1.6 + (Math.random() - .5) } : { x: 0, y: 0, z: 0 })
       .setLinearDamping(.12).setAngularDamping(.4).setCcdEnabled(true).setCanSleep(true));
     const shape = R.ColliderDesc.convexHull(hull) ?? R.ColliderDesc.cylinder(.3, .25);
     w.createCollider(shape.setDensity(1 + mass * .15).setFriction(.55).setRestitution(.28), body);
@@ -82,6 +82,12 @@ export class Debris {
     this.world?.removeRigidBody(t.body);
     t.obj.parent?.remove(t.obj);
     this.live = this.live.filter(x => x !== t);
+  }
+  objects() { return this.live.map(t => t.obj); }
+  /** Give a resting body a shove (title-screen flick). */
+  push(obj: T.Object3D, v: T.Vector3) {
+    const t = this.live.find(x => x.obj === obj); if (!t) return;
+    t.body.setLinvel({ x: v.x, y: v.y, z: v.z }, true); t.body.setAngvel({ x: 0, y: (Math.random() - .5) * 4, z: 0 }, true);
   }
   /** A new board: sweep the table. */
   clear() { for (const t of [...this.live]) this.drop(t); }

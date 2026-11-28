@@ -1,16 +1,17 @@
 import './style.css';
 import { Stage, X, Z, type Quality } from '../render/stage';
 import { sketch } from '../render/aim';
-import { fromFen, toFen, legal, make, status, inCheck, kingSq, pseudo, other, name, parse, START, file, rank, type Pos, type Move, type Mode, type Kind, type Side, type Outcome } from '../engine/rules';
+import { fromFen, toFen, legal, make, status, inCheck, kingSq, pseudo, other, name, parse, START, file, rank, cheb, MASS, type Pos, type Move, type Mode, type Kind, type Side, type Outcome } from '../engine/rules';
 import { choose, rng, LEVEL_NAME, type Level } from '../engine/ai';
 import { EXPERIMENTS } from '../engine/lessons';
 import { sightings, belief, intentions, resolve, apply } from '../engine/fog';
-import { gamma } from '../engine/collide';
+import { gamma, momentum, runSpeed, C } from '../engine/collide';
 import { Sound } from './audio';
 import { store, loadSettings, saveSettings, loadBook, saveBook, loadCodex, saveCodex, today, type Progress, type CodexState } from './store';
 import { gsap, toast, reveal, openPanel, stamp, discovery, scramble, riders } from './fx';
 import { Loader } from './loader';
 import { WORLDS, TIER_WORLD, type WorldId } from '../render/worlds';
+import { DEFAULT_LOOK, NAMES, type Look } from '../render/looks';
 import { intro } from './intro';
 import { ENTRIES, GROUPS, RARITY, byId, detect, newTally, type GameTally } from '../content/codex';
 import { targetMoves, targetStep, emptyTally, addTally, achieved, findMove, mated, defend, uci, type Puzzle, type Seal, type Tally } from '../content/puzzle';
@@ -25,7 +26,7 @@ const pad = (n: number, w = 3) => String(n).padStart(w, '0');
 
 // ── stars: each tier is a real star, hotter as the problems get harder ───
 export const TIERS = [
-  { star: '프록시마', cls: 'M', k: 3000, color: '#ff5a3c', lamp: 2700 },
+  { star: '프록시마 — 기물 그림', cls: 'M', k: 3000, color: '#ff5a3c', lamp: 2700 },
   { star: '아크투루스', cls: 'K', k: 4300, color: '#ff7f3a', lamp: 3100 },
   { star: '태양', cls: 'G', k: 5800, color: '#ffa748', lamp: 3600 },
   { star: '프로키온', cls: 'F', k: 6500, color: '#ffcf6a', lamp: 4200 },
@@ -154,6 +155,7 @@ async function boot() {
   if (settings.intro === 'always' || first) { await intro(); store.set('v1:seenIntro', '1'); }
   try { await loading; }
   catch (e) { $('screen').innerHTML = '<div class="loader"><div class="cap2">3D 체스 세트를 불러오지 못했다 — 새로고침해 다시 시도하세요<br><small>' + String(e) + '</small></div></div>'; throw e; }
+  stage.setLook(look);
   await document.fonts?.ready;
   await loader.finish();
   await new Promise<void>(r => gsap.to(loader.el, { opacity: 0, y: 8, duration: .35, ease: 'power2.in', onComplete: () => r() }));
@@ -163,14 +165,25 @@ async function boot() {
 
 // ── title sequence: switch, flicker, Newton's cradle ────────────────────
 let titleToken = 0;
+const DEMO = '8/8/8/8/Q2qqqq1/8/8/8 w - - 0 1';
+let flickTimer = 0;
+stage.onFlick = () => {
+  register('flick', '타이틀');
+  clearTimeout(flickTimer);
+  flickTimer = window.setTimeout(function check() {
+    if (screen !== 'title' || !stage.flickMode) return;
+    if (stage.boardEmpty()) { toast('판을 다시 세운다'); stage.sync(fromFen(DEMO)); }
+    else flickTimer = window.setTimeout(check, 2500);
+  }, 4000);
+};
 async function title(instant: boolean) {
   screen = 'title'; busy = false; selected = -1;
   const token = ++titleToken;
   $('hud').hidden = true; $('note').hidden = true; stage.chalk.clearNow(); stage.clearStrobe();
   stage.writeBlackboard([]); board = []; stage.setLamp(2700); sound.setPitch(0);
   if (stage.world !== 'lab') void goWorld('lab', false);
-  const demo = fromFen('8/8/8/8/Q2qqqq1/8/8/8 w - - 0 1');
-  stage.sync(demo); stage.resetCamera(); stage.aimZ = -.6; stage.aimX = innerWidth > innerHeight * 1.1 ? 2.4 : 0;
+  const demo = fromFen(DEMO);
+  stage.sync(demo); stage.flickMode = true; stage.resetCamera(); stage.aimZ = -.6; stage.aimX = innerWidth > innerHeight * 1.1 ? 2.4 : 0;
   clearScreen();
   const skip = () => { if (token === titleToken) { titleToken++; showTitleMenu(true); stage.lampFlicker(true); } };
   $('screen').onclick = skip;
@@ -199,14 +212,16 @@ function showTitleMenu(instant: boolean) {
     + row('t-book', '02', '당구 문제', solvedCount() + ' / ' + PUZZLES.length + ' 풀이')
     + row('t-codex', '03', '현상 도감', found + ' / ' + ENTRIES.length + ' 발견')
     + row('t-tut', '04', '실험 노트', tutorialDone() ? '다시 보기' : '처음이라면')
-    + row('t-set', '05', '설정', '')
+    + row('t-look', '05', '꾸미기', NAMES.pieces[look.pieces])
+    + row('t-set', '06', '설정', '')
     + '</div></div>'
-    + '<div class="foot l"><span class="lbl">Red Nebula · v0.6</span></div><div class="foot r"><button id="t-sound">' + (sound.muted ? '소리 켜기' : '소리 끄기') + '</button><button id="t-credits">크레딧</button></div>';
+    + '<div class="foot l"><span class="lbl">Red Nebula · v0.7</span></div><div class="foot r"><button id="t-sound">' + (sound.muted ? '소리 켜기' : '소리 끄기') + '</button><button id="t-credits">크레딧</button></div>';
   $('t-start').onclick = () => { sound.unlock(); if (tutorialDone()) matchSetup(); else { toast('처음이군요 — 실험 노트부터 펼칩니다'); controls(); } };
   $('t-book').onclick = () => { sound.unlock(); openBook(); };
   $('t-codex').onclick = () => { sound.unlock(); openCodex(); };
   $('t-tut').onclick = () => { sound.unlock(); controls(); };
   $('t-set').onclick = () => openSettings(() => showTitleMenu(true));
+  $('t-look').onclick = openLook;
   $('t-sound').onclick = () => { settings.muted = !settings.muted; sound.setMuted(settings.muted); saveSettings(settings); showTitleMenu(true); };
   $('t-credits').onclick = credits;
   $('t-mark').onclick = e => { e.stopPropagation(); spin($('t-mark'), $('t-mark')); };
@@ -233,6 +248,7 @@ function credits() {
     + '<p><b>제작</b> — Red Nebula</p>'
     + '<p><b>체스 세트</b> — "A Beautiful Game", © 2020 ASWF (MaterialX Project), glTF 변환 © 2022 Ed Mackey. <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>, <a href="https://github.com/KhronosGroup/glTF-Sample-Assets" target="_blank" rel="noopener">Khronos glTF Sample Assets</a>.</p>'
     + '<p><b>서체</b> — Hahmlet · Nanum Pen Script (SIL OFL 1.1).</p>'
+    + '<p><b>바다·구름</b> — FFT 바다: dli/waves © David Li (MIT) 이식 · 볼류메트릭 구름·대기: takram three-geospatial (MIT) · postprocessing (Zlib).</p>'
     + '<p><b>라이브러리</b> — three.js (MIT), Rapier 물리 (Apache-2.0), GSAP (GreenSock 표준 라이선스, 무료), Draco & Basis Universal 디코더 (Apache-2.0). 규칙 검증 — chess.js (BSD-2).</p>'
     + '<p><b>소리</b> — 전부 실시간 합성.</p></div><div class="acts"><button class="btn" id="c-back">돌아가기 <span class="k">Esc</span></button></div></div></div>';
   openPanel($('screen').firstElementChild!);
@@ -268,7 +284,7 @@ $('logo').onclick = () => spin($('logo-spin'), $('logo'));
 
 // ── a game ───────────────────────────────────────────────────────────────
 function resetBoard(fen: string) {
-  titleToken++;
+  titleToken++; stage.flickMode = false;
   pos = fromFen(fen); truth = pos; hist = [pos]; outs = []; tally = newTally();
   stage.showStale(new Map()); history = []; moveNo = 0; selected = -1; busy = false;
   stage.chalk.clearNow(); stage.clearStrobe(); stage.sync(pos);
@@ -325,11 +341,37 @@ function drawSelection() {
   const c = stage.chalk; c.clearNow(); drawMarks(); pending = null; hoverRing = -1;
   if (selected < 0) return;
   c.circle([X(selected), Z(selected)], .44, { dur: 140, alpha: .9 });
+  const physical = screen === 'puzzle' || mode === 'clash';
+  // how much the marks may reveal: puzzle seals that blind the sketch also blind the outcome colours
+  const seals = screen === 'puzzle' && puz ? puz.seals : [];
+  const reveal = !seals.some(x => x === '盲' || x === '半' || x === '宣'), newton = seals.includes('速');
+  const pMax = momentum(MASS.q, runSpeed(7));
   for (const m of targetsOf(selected)) {
     if (m.promo && m.promo !== 'q') continue;
-    if (m.flag === 'c') c.circle([X(m.to), Z(m.to)], .12, { dur: 80, alpha: .8, color: '#ffc98a' });
-    else c.circle([X(m.to), Z(m.to)], .09, { dur: 60, alpha: .7 });
+    const at: [number, number] = [X(m.to), Z(m.to)], run = m.via !== undefined ? cheb(m.from, m.via) + cheb(m.via, m.to) : cheb(m.from, m.to);
+    if (m.flag !== 'c' && m.flag !== 'e') {
+      // quiet square: the dot grows with the run-up speed you would arrive with
+      const slider = m.kind === 'b' || m.kind === 'r' || m.kind === 'q';
+      c.circle(at, slider && physical ? .06 + .09 * runSpeed(run) / C : .08, { dur: 60, alpha: .72 });
+      if (m.via !== undefined) c.circle(at, .17, { dur: 80, alpha: .45, color: '#9fd8ff' });
+      continue;
+    }
+    if (!physical) { c.circle(at, .36, { dur: 90, alpha: .75, color: '#ffc98a' }); continue; }
+    if (m.kind === 'n') { c.circle(at, .32, { dur: 90, alpha: .85, color: '#ff8f7a' }); c.cross(at, .12, { dur: 70, alpha: .8, color: '#ff8f7a' }); continue; }
+    let r: ReturnType<typeof make> | null = null;
+    try { r = puz?.goal.type !== 'mate' && screen === 'puzzle' ? targetStep(pos, m, newton) : make(pos, m, 'clash', { newton }); } catch { r = null; }
+    const cl = r?.out.clash, p = cl ? momentum(MASS[m.kind], cl.speed) : 0;
+    const radius = .18 + .24 * Math.min(1, p / pMax);
+    const foes = r ? r.out.removed.filter(x => x.side === pos.turn ? false : true).length : 0, mine = r ? r.out.removed.filter(x => x.side === pos.turn).length : 0;
+    const color = !reveal ? '#ffc98a' : mine ? '#9fc4ff' : foes ? '#ff8f7a' : '#ffc98a';
+    c.circle(at, radius, { dur: 100, alpha: .85, color });
+    if (reveal) for (let i = 0; i < foes; i++) {
+      const ang = -Math.PI / 2 + (i - (foes - 1) / 2) * .5, r0 = radius + .05, r1 = radius + .17;
+      c.path([[at[0] + Math.cos(ang) * r0, at[1] + Math.sin(ang) * r0], [at[0] + Math.cos(ang) * r1, at[1] + Math.sin(ang) * r1]], { dur: 60, delay: 80, color, alpha: .9, width: .05 });
+    }
+    if (m.via !== undefined) c.circle(at, radius + .1, { dur: 90, alpha: .4, color: '#9fd8ff', dash: .08 });
   }
+  if (!store.get('v1:legend') && screen !== 'title') { store.set('v1:legend', '1'); toast('점 = 도착 속도 · 고리 = 충격 운동량 · 붉은 고리 = 적이 떨어진다 · 눈금 = 떨어지는 수', 5200); }
 }
 /** Hover grows the hovered target's dot into a ring — only that ring moves; nothing else is redrawn. */
 let hoverRing = -1;
@@ -616,6 +658,7 @@ function note() {
       + '<div class="check">' + c('select', '클릭', '흰 기물 선택') + c('rotate', '드래그', '시점 회전') + c('zoom', '휠', '확대·축소') + c('cancel', '우클릭', '선택 취소') + '</div>'
       + '<div class="keys"><span class="cap">A</span><span>조준 판서 — 결과를 미리 그린다</span>'
       + '<span class="cap">R</span><span>시점 초기화</span><span class="cap">SPACE</span><span>빛 피라미드 (光)</span><span class="cap">⌫</span><span>문제: 처음 배치로</span><span class="cap">ESC</span><span>메뉴 · 선택 취소</span><span class="cap">↑↓</span><span>메뉴 이동</span></div>'
+      + '<p style="margin-top:10px"><b>판 위 표시</b> — 점이 클수록 빨리 도착 · 고리가 클수록 세게 부딪침 · <span style="color:#b8402e">붉은 고리</span> 적이 떨어짐 · <span style="color:#9a6a1a">호박 고리</span> 밀기만 · <span style="color:#2c4c80">푸른 고리</span> 내 손해 · 고리 위 눈금 = 떨어지는 수</p>'
       + '<div class="acts">' + skip + '</div></div>';
   } else if (expPhase === 'predict') {
     n.innerHTML = head + '<h3>' + e.title + '</h3><p><b>예측</b> — ' + e.predict!.q + '</p><div class="opts">'
@@ -655,6 +698,7 @@ const isTorn = (id: number) => book[id]?.torn === today();
 function tierSolved(t: number) { return PUZZLES.filter(p => p.tier === t && book[p.id]?.solved).length; }
 function tierOpen(t: number) { return t === 1 || tierSolved(t - 1) >= 7 || store.get('v1:allopen') === '1'; }
 function goalText(p: Puzzle): string {
+  if (p.text) return p.text;
   const n = ['', '한 수로', '두 수로', '세 수로'][p.depth];
   if (p.goal.type === 'mate') return (p.depth === 1 ? '한 수' : '두 수') + ' 안에 메이트';
   const keep = p.goal.keep ? ' — 백은 하나도 잃지 말 것' : '';
@@ -701,7 +745,7 @@ function renderCard() {
   if (!puz) return;
   const p = puz, r = book[p.id];
   $('pcard').innerHTML = '<div class="ph"><span class="lbl">No. ' + pad(p.id) + '</span>' + stars(p.tier) + '</div><div class="pb">'
-    + '<div class="goal">' + goalText(p) + '</div>'
+    + (p.title ? '<div class="lbl" style="color:var(--brass);margin-bottom:4px">' + p.title + '</div>' : '') + '<div class="goal">' + goalText(p) + '</div>'
     + '<div class="seals">' + (p.seals.length ? p.seals.map(s => '<span class="seal" title="' + SEAL_TEXT[s] + '">' + s + '</span>').join('') : '<span class="lbl">제약 없음</span>') + '</div>'
     + '<div class="meta"><span class="lbl">' + TIERS[p.tier - 1].star + ' · ' + TIERS[p.tier - 1].cls + '</span><span class="lbl">시도 ' + (r?.tries ?? 0) + (r?.solved ? ' · 解' : '') + '</span></div></div>';
 }
@@ -813,6 +857,7 @@ async function solvedPuzzle() {
 
 let bookTier = 1, bookSel = 0;
 function openBook(tier?: number, sel?: number) {
+  stage.flickMode = false;
   screen = 'title'; puz = null; busy = false; titleToken++;
   $('hud').hidden = true; $('note').hidden = true; hudFor('title');
   stage.chalk.clearNow();
@@ -845,7 +890,7 @@ function renderBook(anim = false) {
     + '<div class="sealkey">' + (introSeals.length ? introSeals.map(s => '<span class="seal">' + s + '</span><span>' + SEAL_TEXT[s] + '</span>').join('') : '<span></span><span>조준 판서가 결과를 전부 보여 준다</span>') + '</div></div>'
     + (open ? '' : '<p class="sub">앞 단계에서 7문제를 풀면 열린다.</p>')
     + '<div class="cells">' + cells + '</div>'
-    + '<div class="detail"><div><span class="lbl">No. ' + pad(sp.id) + '</span><div class="goal" style="margin-top:6px">' + goalText(sp) + '</div><div class="seals">' + seals + '</div>'
+    + '<div class="detail"><div><span class="lbl">No. ' + pad(sp.id) + (sp.title ? ' · ' + sp.title : '') + '</span><div class="goal" style="margin-top:6px">' + goalText(sp) + '</div><div class="seals">' + seals + '</div>'
     + '<div class="facts"><div><span class="lbl">' + (sp.goal.type === 'mate' ? '첫 수 후보' : '가능한 수순') + '</span><b>' + sp.total.toLocaleString() + '</b></div><div><span class="lbl">' + (sp.goal.type === 'mate' ? '강제 메이트' : '해답') + '</span><b>' + (r?.solved ? sp.solutions : '?') + '</b></div><div><span class="lbl">시도</span><b>' + (r?.tries ?? 0) + '</b></div><div><span class="lbl">난도</span><b>' + sp.score.toFixed(1) + '</b></div></div></div>'
     + '<div class="go" style="display:flex;flex-direction:column;gap:8px"><button class="btn main" id="b-go"' + (open && !isTorn(sp.id) ? '' : ' disabled') + '>' + (isTorn(sp.id) ? '내일 다시' : r?.solved ? '다시 풀기' : '풀기') + ' <span class="k">ENTER</span></button><button class="btn" id="b-back">돌아가기 <span class="k">ESC</span></button></div></div>'
     + '</div></div></div>';
@@ -862,6 +907,7 @@ function renderBook(anim = false) {
 // ── 현상 도감 ────────────────────────────────────────────────────────────
 let codexGroup = -1, codexSel = '';
 function openCodex() {
+  stage.flickMode = false;
   screen = 'title'; titleToken++; $('hud').hidden = true; $('note').hidden = true;
   codexSel = codexSel || ENTRIES[0].id;
   renderCodex(true);
@@ -891,6 +937,28 @@ function renderCodex(anim = false) {
   document.querySelectorAll<HTMLButtonElement>('[data-g]').forEach(b => b.onclick = () => { codexGroup = Number(b.dataset.g); sound.tick(); renderCodex(true); });
   document.querySelectorAll<HTMLButtonElement>('[data-c]').forEach(b => { b.onclick = () => { codexSel = b.dataset.c!; sound.tick(); renderCodex(); }; b.onpointerenter = () => sound.hover(); });
   $('cx-back').onclick = () => title(true);
+}
+
+// ── 꾸미기 ───────────────────────────────────────────────────────────────
+const look: Look = (() => { try { return { ...DEFAULT_LOOK, ...JSON.parse(store.get('v1:look') || '{}') }; } catch { return { ...DEFAULT_LOOK }; } })();
+function openLook() {
+  stage.flickMode = false; stage.aimX = innerWidth > innerHeight * 1.1 ? -2.6 : 0;
+  const seg = (key: keyof Look) => '<div class="seg">' + Object.entries(NAMES[key]).map(([v, t]) => '<button data-look="' + key + '" data-v="' + v + '" class="' + (look[key] === v ? 'on' : '') + '">' + t + '</button>').join('') + '</div>';
+  const first = !$('screen').classList.contains('side');
+  $('screen').className = 'side';
+  $('screen').innerHTML = '<div class="panel set lookp"><div class="ph"><span class="lbl">꾸미기</span></div><div class="pb">'
+    + '<div class="line"><span class="lbl">기물</span>' + seg('pieces') + '</div>'
+    + '<div class="line"><span class="lbl">보드</span>' + seg('board') + '</div>'
+    + '<div class="line"><span class="lbl">테이블</span>' + seg('table') + '</div>'
+    + '<div class="acts"><button class="btn" id="l-back">돌아가기 <span class="k">Esc</span></button></div></div></div>';
+  if (first) openPanel($('screen').firstElementChild!);
+  document.querySelectorAll<HTMLButtonElement>('[data-look]').forEach(b => b.onclick = () => {
+    (look as unknown as Record<string, string>)[b.dataset.look!] = b.dataset.v!;
+    store.set('v1:look', JSON.stringify(look)); sound.tick();
+    stage.setLook(look); stage.sync(screen === 'title' ? fromFen(DEMO) : pos); stage.flickMode = false;
+    openLook();
+  });
+  $('l-back').onclick = () => { stage.aimX = innerWidth > innerHeight * 1.1 ? 2.4 : 0; showTitleMenu(true); stage.flickMode = true; };
 }
 
 // ── settings ─────────────────────────────────────────────────────────────
@@ -983,6 +1051,7 @@ document.addEventListener('keydown', e => {
       back?.click(); return;
     }
     if (document.getElementById('g-back')) { $('g-back').click(); return; }
+    if (document.getElementById('l-back')) { $('l-back').click(); return; }
     if (document.getElementById('c-back')) { $('c-back').click(); return; }
     if (overlay && screen !== 'title' && screen !== 'over') { clearScreen(); return; }
     if (screen === 'puzzle' && pz.from >= 0) { pz.from = -1; drawSelection(); return; }

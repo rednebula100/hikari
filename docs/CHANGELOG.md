@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.0 — abilities, worlds rebuilt, ateliers (2026-11-28)
+- **Piece abilities (衝/光):** knight stomps only mass ≤ 3 and every landing sends a shockwave (adjacent enemies ≤ 5
+  shift one square, off the edge they fall); bishop cushion shot (one reflection off the rim); pawn phalanx (+1 mass per
+  pawn beside). Researched from Atomic chess, Betza's Billiards Chess / reflecting bishop, Chess 2. Tutorial 9 experiments.
+- **Sea rebuilt** from dli/waves (MIT): GPU FFT wind-wave spectrum on three.js render targets.
+- **Clouds rebuilt** from takram three-geospatial (MIT): volumetric clouds, physical sky, star catalogue, moonlit grade.
+- Board marks carry information (dot = arrival speed, ring = impact momentum, colour = engine outcome, ticks = falls).
+- Ground ripple on 64 board tiles; knight crushes exactly under its base; strobe exposures are fading light shells.
+- ★1 is now 「기물 그림」: ten pictures drawn in pieces with playful goals.
+- 꾸미기: lathe-turned piece sets (glass, brass & ebony, porcelain), table finishes, board themes.
+- Title easter egg: flick the queens (알까기). Lattice drifts in panels only; one-piece brass rule frame; orbit plate fits.
+- Master spec rewritten; v0.1 material archived.
+
 ## 0.6.0 — worlds, nocturne UI (2026-11-27)
 - **Worlds** (`src/render/worlds.ts`): the problem tiers move the board — ★1–2 night lab, ★3–4 a little boat on the
   sunset sea (three.js Sky + own ocean shader), ★5–6 a marble plinth above a moonlit cloud sea, ★7–8 an ice slab under

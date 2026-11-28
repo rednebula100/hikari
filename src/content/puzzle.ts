@@ -24,6 +24,9 @@ export interface Puzzle {
   newton?: boolean    // the classical prediction gets this one wrong (★4)
   chain?: number      // contacts in the stored solution
   seals: Seal[]
+  /** ★1 piece-art: a picture's name and a playful goal line */
+  title?: string
+  text?: string
 }
 
 /** Seals in force at each tier (cumulative where they can combine). */

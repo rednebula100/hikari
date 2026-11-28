@@ -3,6 +3,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { loadSet, type ChessSet } from './assets';
 import { Chalk } from './chalk';
 import { Debris } from './physics';
+import { latheSet, tableMaterial, boardTheme, type Look } from './looks';
 import { buildWorld, type Built, type WorldId } from './worlds';
 import { C, gamma } from '../engine/collide';
 import { MASS, cheb, file, rank, type Outcome, type Pos, type Piece, type Kind, type Side } from '../engine/rules';
@@ -121,6 +122,7 @@ export class Stage {
     this.scene.add(this.chalk.mesh, this.ghosts, this.flashLight);
     this.hoverMesh.rotation.x = -Math.PI / 2; this.hoverMesh.visible = false; this.scene.add(this.hoverMesh);
     this.buildTiles();
+    this.buildQuakeTiles();
     this.debris.onImpact = (m, v) => this.sound.thud(m, v);
     setTimeout(() => void this.debris.init(box, this.surface), 400); // after first paint: the WASM engine loads lazily
   }
@@ -158,7 +160,7 @@ export class Stage {
     w.fillStyle = '#20150f'; w.fillRect(0, 0, 1024, 1024);
     for (let i = 0; i < 260; i++) { w.strokeStyle = `rgba(${60 + Math.random() * 30},${38 + Math.random() * 18},${24},${.08 + Math.random() * .12})`; w.lineWidth = 1 + Math.random() * 3; w.beginPath(); const y = Math.random() * 1024; w.moveTo(0, y); for (let x = 0; x <= 1024; x += 64) w.lineTo(x, y + Math.sin(x / 140 + i) * 6); w.stroke(); }
     const wt = new T.CanvasTexture(wood); wt.wrapS = wt.wrapT = T.RepeatWrapping; wt.repeat.set(3, 3); wt.colorSpace = T.SRGBColorSpace;
-    const table = new T.Mesh(new T.PlaneGeometry(60, 60), new T.MeshStandardMaterial({ map: wt, roughness: .55, metalness: .05 }));
+    const table = this.table = new T.Mesh(new T.PlaneGeometry(60, 60), new T.MeshStandardMaterial({ map: wt, roughness: .55, metalness: .05 }));
     table.rotation.x = -Math.PI / 2; table.position.y = box.min.y - .002; table.receiveShadow = true;
     this.floor.add(table); this.lab.add(this.floor);
     // brass rulers along the cliff edges
@@ -203,7 +205,7 @@ export class Stage {
   private model(p: Piece) {
     let m = this.pieces.get(p.id);
     if (m && m.userData.kind !== p.kind) { this.scene.remove(m); m = undefined; }
-    if (!m) { m = this.set.make(p.kind, p.side); m.userData.id = p.id; this.pieces.set(p.id, m); this.scene.add(m); }
+    if (!m) { m = this.makePiece(p.kind, p.side); m.userData.id = p.id; this.pieces.set(p.id, m); this.scene.add(m); }
     return m;
   }
   /** Bumped whenever the board is replaced; stale playbacks must not write back. */
@@ -313,14 +315,30 @@ export class Stage {
       const rook = before.board[rf]; if (rook) await this.slide(this.model(rook), rf, rt);
     } else if (m.kind === 'n') await this.hop(obj, m.from, m.to);
     else {
-      await this.slide(obj, m.from, m.to);
+      if (m.via !== undefined) { await this.slide(obj, m.from, m.via); this.sound.clack(4, .4); await this.slide(obj, m.via, m.to); }
+      else await this.slide(obj, m.from, m.to);
       for (const v of out.removed) { const vo = this.pieces.get(v.id); if (vo) { this.sound.clack(MASS[v.kind] + MASS[m.kind], 1); await this.sink(vo); } }
     }
+    if (out.shock?.length && epoch === this.epoch) await this.playShock(m.to, out.shock);
     if (epoch !== this.epoch) return; // the board was replaced meanwhile (e.g. title demo skipped)
     this.sound.settle();
     this.sync(after, false);
+    setTimeout(() => { if (epoch === this.epoch) this.fadeGhosts(); }, 900);
   }
 
+  /** The knight's landing shockwave: neighbours slide one square away, or over the cliff. */
+  private async playShock(land: number, list: { id: string; from: number; to: number | null }[]) {
+    this.sound.stomp(3); this.flash(new T.Vector3(X(land), this.surface + .2, Z(land)), 5); this.quake(X(land), Z(land), 6);
+    this.chalk.circle([X(land), Z(land)], .7, { dur: 160, alpha: .5 }); this.chalk.circle([X(land), Z(land)], 1.25, { dur: 260, delay: 60, alpha: .3 });
+    await Promise.all(list.map(async x => {
+      const o = this.pieces.get(x.id); if (!o) return;
+      if (x.to !== null) return this.slide(o, x.from, x.to);
+      const dir = new T.Vector3(X(x.from) - X(land), 0, Z(x.from) - Z(land)).normalize();
+      const a = o.position.clone(), b = a.clone().addScaledVector(dir, .55);
+      await this.tween(this.reduced ? 60 : 160, u => o.position.lerpVectors(a, b, u));
+      this.fall(o, dir, 1.6);
+    }));
+  }
   private slide(obj: T.Object3D, from: number, to: number) {
     const d = Math.max(Math.abs(file(to) - file(from)), Math.abs(rank(to) - rank(from)));
     const dur = this.reduced ? 120 : 240 + 70 * d, a = new T.Vector3(X(from), this.surface, Z(from)), b = new T.Vector3(X(to), this.surface, Z(to));
@@ -344,13 +362,30 @@ export class Stage {
   }
   private async playStomp(obj: T.Object3D, from: number, to: number, victim: Piece) {
     this.sound.whistle();
-    await this.hop(obj, from, to, this.reduced ? 0 : 260, 2.2);
+    const vo = this.pieces.get(victim.id);
+    const vh = vo ? Math.max(.2, new T.Box3().setFromObject(vo).max.y - this.surface) : .8;
+    const a = new T.Vector3(X(from), this.surface, Z(from)), b = new T.Vector3(X(to), this.surface, Z(to)), H = 2.2, flat = .06;
+    // up and across, hang over the target …
+    await this.tween(this.reduced ? 120 : 420, u => { const k = ease(u); obj.position.lerpVectors(a, b, k); obj.position.y = this.surface + H * Math.sin(k * Math.PI / 2); });
+    if (!this.reduced) await wait(240);
+    // … then fall: the victim is pressed flat under the knight's base, never inside it
+    await this.tween(this.reduced ? 80 : 230, u => {
+      const y = this.surface + vh * flat + (H - vh * flat) * (1 - u * u);
+      obj.position.set(b.x, y, b.z);
+      if (vo) { const sy = Math.min(1, Math.max(flat, (y - this.surface) / vh)); const w = 1 + (1 - sy) * .28; vo.scale.set(w, sy, w); vo.userData.noWobble = true; }
+    });
+    this.quake(b.x, b.z, 9);
     this.sound.stomp(MASS[victim.kind]);
     this.flash(new T.Vector3(X(to), this.surface + .3, Z(to)), 7);
     this.chalk.circle([X(to), Z(to)], .55, { dur: 160 }); this.chalk.circle([X(to), Z(to)], .85, { dur: 220, delay: 60, alpha: .5 });
     this.heatUp(to, 1);
-    const vo = this.pieces.get(victim.id);
-    if (vo) { await this.sink(vo); this.scene.remove(vo); this.pieces.delete(victim.id); }
+    if (vo) {
+      // the pancake turns to heat and is gone; the knight settles onto the board
+      const s0 = vo.scale.clone();
+      await this.tween(this.reduced ? 60 : 420, u => { vo.scale.set(s0.x * (1 + u * .1), s0.y * (1 - u), s0.z * (1 + u * .1)); obj.position.y = this.surface + vh * flat * (1 - u); });
+      this.scene.remove(vo); this.pieces.delete(victim.id);
+    }
+    obj.position.y = this.surface;
     this.sound.sizzle();
     setTimeout(() => this.chalk.erase(500), 900);
   }
@@ -367,7 +402,16 @@ export class Stage {
     const from = new T.Vector3(X(out.move.from), this.surface, Z(out.move.from)), touch = at(startTrack.keys[0].s);
     this.railLight(true, line);
     this.sound.slide(cl.speed / C, 160 + cl.run * 80);
-    await this.tween(this.reduced ? 120 : 160 + cl.run * 80, u => attacker.position.lerpVectors(from, touch, u * u));
+    if (out.move.via !== undefined) {
+      // cushion: the run-up bends once at the rim
+      const v = new T.Vector3(X(out.move.via), this.surface, Z(out.move.via)), l1 = from.distanceTo(v), l2 = v.distanceTo(touch), tot = l1 + l2;
+      let banked = false;
+      await this.tween(this.reduced ? 120 : 160 + cl.run * 80, u => {
+        const d = u * u * tot;
+        if (d <= l1) attacker.position.lerpVectors(from, v, d / l1);
+        else { if (!banked) { banked = true; this.sound.clack(4, .6); this.chalk.circle([v.x, v.z], .3, { dur: 120, alpha: .7, color: '#9fd8ff' }); } attacker.position.lerpVectors(v, touch, (d - l1) / Math.max(1e-3, l2)); }
+      });
+    } else await this.tween(this.reduced ? 120 : 160 + cl.run * 80, u => attacker.position.lerpVectors(from, touch, u * u));
     // 2. camera on the rail, time slows
     const mid = contact ? at(contact.s) : touch;
     if (!this.reduced) this.railCam(mid, step);
@@ -402,6 +446,7 @@ export class Stage {
         const mb = MASS[(before.board.find(p => p?.id === c.b))?.kind ?? 'p'];
         this.sound.clack(ma + mb, Math.abs(c.before[0] - c.after[0]) * ma, contactIx);
         this.flash(at(c.s).setY(this.surface + .4), contactIx === 1 ? 9 : 4);
+        { const q = at(c.s); this.quake(q.x, q.z, Math.min(10, Math.abs(c.before[0] - c.after[0]) * ma)); }
         this.kick(c.a, step, c.after[0] - c.before[0], ma); this.kick(c.b, step, c.after[1] - c.before[1], mb);
       }
       while (t >= nextStrobe && nextStrobe <= 1) {
@@ -440,10 +485,101 @@ export class Stage {
     await wait(this.reduced ? 0 : 160);
   }
 
+  // ── strobe exposures: shells of light that dim with age ──
   private ghost(o: T.Object3D) {
-    const g = o.clone(true);
-    g.traverse(x => { const m = x as T.Mesh; if (m.isMesh) { m.material = GHOST; m.castShadow = false; m.receiveShadow = false; } });
-    g.position.copy(o.position); this.ghosts.add(g);
+    const g = o.clone(true), mat = GHOST.clone();
+    g.traverse(x => { const m = x as T.Mesh; if (m.isMesh) { m.material = mat; m.castShadow = false; m.receiveShadow = false; } });
+    g.position.copy(o.position); g.scale.copy(o.scale); g.userData.mat = mat;
+    for (const old of this.ghosts.children) { const u = (old.userData.mat as T.ShaderMaterial).uniforms.opacity; u.value *= .9; }
+    this.ghosts.add(g);
+  }
+  /** After the move, exposures fade out oldest first. */
+  private fadeGhosts() {
+    const list = [...this.ghosts.children], t0 = performance.now(), n = list.length;
+    if (!n) return;
+    const start = list.map(g => (g.userData.mat as T.ShaderMaterial).uniforms.opacity.value as number);
+    this.anims.push({ update: now => {
+      const t = (now - t0) / 2600;
+      list.forEach((g, i) => { const k = Math.min(1, Math.max(0, t * 1.6 - (i / n) * .6)); (g.userData.mat as T.ShaderMaterial).uniforms.opacity.value = start[i] * (1 - k); });
+      if (t >= 1) { for (const g of list) { this.ghosts.remove(g); (g.userData.mat as T.ShaderMaterial).dispose(); } return false; }
+      return true;
+    } });
+  }
+
+  // ── ground ripple: 64 tiles cut from the board's own texture, shown only while the floor moves ──
+  private qTiles: T.Mesh[] = [];
+  private themed = false;
+  private table!: T.Mesh;
+  private makePiece: (k: Kind, s: Side) => T.Object3D = (k, s) => this.set.make(k, s);
+  /** 꾸미기: piece set, table finish, board theme. Call sync() afterwards to rebuild the pieces. */
+  setLook(look: Look) {
+    if (!this.set) return;
+    const king = new T.Box3().setFromObject(this.set.make('k', 'w')), kh = king.max.y - king.min.y;
+    this.makePiece = look.pieces === 'abg' ? (k, s) => this.set.make(k, s) : latheSet(look.pieces, kh);
+    for (const o of this.pieces.values()) this.scene.remove(o);
+    this.pieces.clear(); this.hulls.clear(); this.wob.clear();
+    (this.table.material as T.Material).dispose(); this.table.material = tableMaterial(look.table);
+    const theme = boardTheme(look.board), boardMat = (this.qTiles[0]?.material as T.Material[] | undefined)?.[2];
+    this.themed = !!theme;
+    const original = this.qTiles[0]?.userData.boardMat as T.MeshStandardMaterial | undefined;
+    this.qTiles.forEach((m, i) => {
+      const mats = m.material as T.Material[];
+      m.userData.boardMat ??= mats[2];
+      mats[2] = theme ? ((file(i) + rank(i)) % 2 ? theme.light : theme.dark) : (m.userData.boardMat as T.Material);
+      m.visible = this.themed;
+    });
+    const bm = (original ?? boardMat) as T.MeshStandardMaterial | undefined;
+    if (bm) bm.color.set(theme ? theme.frameTint : 0xffffff);
+    this.shadowDirty = true;
+  }
+  private quakes: { x: number; z: number; a: number; t0: number }[] = [];
+  private buildQuakeTiles() {
+    const ray = new T.Raycaster(), down = new T.Vector3(0, -1, 0);
+    const probe = (x: number, z: number) => { ray.set(new T.Vector3(x, 5, z), down); return ray.intersectObject(this.board, true)[0]; };
+    const h0 = probe(-3.999, -3.999), hx = probe(3.999, -3.999), hz = probe(-3.999, 3.999);
+    if (!h0?.uv || !hx?.uv || !hz?.uv) return;
+    const top = h0.point.y, boardMat = (h0.object as T.Mesh).material as T.Material;
+    const du = hx.uv.clone().sub(h0.uv).divideScalar(7.998), dv = hz.uv.clone().sub(h0.uv).divideScalar(7.998);
+    const uvAt = (x: number, z: number) => h0.uv!.clone().addScaledVector(du, x + 3.999).addScaledVector(dv, z + 3.999);
+    const side = new T.MeshStandardMaterial({ color: 0x15120f, roughness: .7 });
+    for (let s2 = 0; s2 < 64; s2++) {
+      const g = new T.BoxGeometry(1, .14, 1); g.translate(0, -.07, 0);
+      const pos = g.getAttribute('position'), uv = g.getAttribute('uv');
+      for (let i = 0; i < pos.count; i++) { const q = uvAt(X(s2) + pos.getX(i), Z(s2) + pos.getZ(i)); uv.setXY(i, q.x, q.y); }
+      const m = new T.Mesh(g, [side, side, boardMat, side, side, side]);
+      m.position.set(X(s2), top + .0015, Z(s2)); m.visible = false; m.receiveShadow = true; m.userData.top = top + .0015;
+      this.qTiles.push(m); this.scene.add(m);
+    }
+  }
+  /** A circular wave on the floor from (x, z); strength ~ impulse. */
+  quake(x: number, z: number, strength: number) {
+    if (this.reduced || !this.qTiles.length || this.pyr.u > .01) return;
+    this.quakes.push({ x, z, a: Math.min(.16, .03 + strength * .013), t0: performance.now() });
+  }
+  private quakeWas = false;
+  private updateQuake(now: number) {
+    if (!this.quakes.length && !this.quakeWas) return false;
+    this.quakes = this.quakes.filter(q => now - q.t0 < 1400);
+    const live = this.quakes.length > 0, height = new Float32Array(64);
+    for (const q of this.quakes) {
+      const t = (now - q.t0) / 1000;
+      for (let s2 = 0; s2 < 64; s2++) {
+        const r = Math.hypot(X(s2) - q.x, Z(s2) - q.z), lag = t - r / 7.5;
+        if (lag < 0) continue;
+        height[s2] += q.a * Math.sin(lag * 22) * Math.exp(-lag * 4.2) * Math.exp(-r * .12);
+      }
+    }
+    this.qTiles.forEach((m, i) => { m.visible = live || this.themed; m.position.y = (m.userData.top as number) + height[i]; });
+    // pieces ride the tile under them (offset on the inner model, so playback can keep owning the group)
+    for (const o of this.pieces.values()) {
+      const inner = o.children[0]; if (!inner) continue;
+      inner.userData.seat ??= inner.position.y;
+      const f = Math.round(3.5 - o.position.x), r = Math.round(o.position.z + 3.5);
+      const h = live && f >= 0 && f < 8 && r >= 0 && r < 8 && Math.abs(o.position.y - this.surface) < .05 ? height[r * 8 + f] : 0;
+      inner.position.y = (inner.userData.seat as number) + h;
+    }
+    const r = live || this.quakeWas; this.quakeWas = live;
+    return r;
   }
   private fall(o: T.Object3D, dir: T.Vector3, speed: number) {
     const id = o.userData.id as string, kind = o.userData.kind as Kind;
@@ -513,7 +649,7 @@ export class Stage {
     const key = o.userData.kind + o.userData.side;
     let h = this.hulls.get(key);
     if (h) return h;
-    const probe = this.set.make(o.userData.kind, o.userData.side); probe.updateMatrixWorld(true);
+    const probe = this.makePiece(o.userData.kind, o.userData.side); probe.updateMatrixWorld(true);
     const pts: number[] = [], v = new T.Vector3();
     probe.traverse(x => {
       const m = x as T.Mesh; if (!m.isMesh) return;
@@ -564,18 +700,61 @@ export class Stage {
   }
 
   // ── input & camera ─────────────────────────────────────────────────────
+  // ── title easter egg: flick the pieces (alkkagi) ──
+  flickMode = false;
+  onFlick: () => void = () => {};
+  private aim: { obj: T.Object3D } | null = null;
+  private planeAt(cx: number, cy: number) {
+    const r = this.renderer.domElement.getBoundingClientRect(), ray = new T.Raycaster();
+    ray.setFromCamera(new T.Vector2((cx - r.left) / r.width * 2 - 1, -(cy - r.top) / r.height * 2 + 1), this.camera);
+    return { ray, p: ray.ray.intersectPlane(new T.Plane(new T.Vector3(0, 1, 0), -this.surface), new T.Vector3()) };
+  }
+  private grab(cx: number, cy: number): T.Object3D | null {
+    if (!this.debris.ready) return null;
+    const { ray } = this.planeAt(cx, cy), all = [...this.pieces.values(), ...this.debris.objects()];
+    const hit = ray.intersectObjects(all, true)[0]; if (!hit) return null;
+    let o: T.Object3D | null = hit.object; while (o && !all.includes(o)) o = o.parent;
+    return o;
+  }
+  /** Every piece on the title board becomes a resting rigid body (once). */
+  private physicalize() {
+    for (const [id, o] of [...this.pieces]) { o.updateMatrixWorld(); if (this.debris.throw(o, this.hull(o), new T.Vector3(), MASS[o.userData.kind as Kind] ?? 3, false)) { this.pieces.delete(id); this.wob.delete(id); } }
+  }
+  /** Have all flicked pieces left the board? */
+  boardEmpty() {
+    return this.pieces.size === 0 && this.debris.objects().every(o => Math.abs(o.position.x) > 4.3 || Math.abs(o.position.z) > 4.3 || o.position.y < this.surface - .3);
+  }
   private bindInput() {
     const c = this.renderer.domElement;
     c.addEventListener('contextmenu', e => e.preventDefault());
     for (const ev of ['pointermove', 'pointerdown', 'wheel', 'keydown'] as const) window.addEventListener(ev, () => { this.lastInput = performance.now(); }, { passive: true });
-    c.addEventListener('pointerdown', e => { this.drag = { x: e.clientX, y: e.clientY, moved: false, button: e.button }; c.setPointerCapture(e.pointerId); });
+    c.addEventListener('pointerdown', e => {
+      if (this.flickMode && e.button === 0) { const o = this.grab(e.clientX, e.clientY); if (o) { this.aim = { obj: o }; c.setPointerCapture(e.pointerId); return; } }
+      this.drag = { x: e.clientX, y: e.clientY, moved: false, button: e.button }; c.setPointerCapture(e.pointerId);
+    });
     c.addEventListener('pointermove', e => {
+      if (this.aim) {
+        const { p } = this.planeAt(e.clientX, e.clientY), o = this.aim.obj; if (!p) return;
+        const pull = new T.Vector3(o.position.x - p.x, 0, o.position.z - p.z); if (pull.length() > 4) pull.setLength(4);
+        this.chalk.remove('flick'); this.chalk.layer = 'flick';
+        this.chalk.path([[o.position.x, o.position.z], [o.position.x - pull.x, o.position.z - pull.z]], { dur: 0, alpha: .5, dash: .1 });
+        this.chalk.arrow([o.position.x, o.position.z], [o.position.x + pull.x, o.position.z + pull.z], { dur: 0, alpha: .9, color: '#ffc98a' });
+        this.chalk.layer = ''; this.aim = { obj: o }; (this.aim as unknown as { pull: T.Vector3 }).pull = pull;
+        return;
+      }
       const d = this.drag;
       if (d && (d.moved || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 5)) { d.moved = true; this.yaw -= e.movementX * .005; this.pitch = Math.min(1.35, Math.max(.22, this.pitch + e.movementY * .004)); return; }
       const s = this.pick(e.clientX, e.clientY);
       if (s !== this.hoverSq) { this.hoverSq = s; this.onHover(s); }
     });
-    c.addEventListener('pointerup', e => { const d = this.drag; this.drag = undefined; if (!d || d.moved) return; this.onSquare(this.pick(e.clientX, e.clientY), d.button); });
+    c.addEventListener('pointerup', e => {
+      if (this.aim) {
+        const pull = (this.aim as unknown as { pull?: T.Vector3 }).pull, o = this.aim.obj; this.aim = null; this.chalk.remove('flick');
+        if (pull && pull.length() > .25) { this.physicalize(); this.debris.push(o, pull.clone().multiplyScalar(4.2)); this.sound.clack(4, pull.length()); this.onFlick(); }
+        return;
+      }
+      const d = this.drag; this.drag = undefined; if (!d || d.moved) return; this.onSquare(this.pick(e.clientX, e.clientY), d.button);
+    });
     c.addEventListener('pointerleave', () => { this.hoverSq = -1; this.onHover(-1); });
     c.addEventListener('wheel', e => { e.preventDefault(); this.dist = Math.min(32, Math.max(11, this.dist * Math.exp(Math.sign(e.deltaY) * .07))); }, { passive: false });
   }
@@ -673,9 +852,9 @@ export class Stage {
     requestAnimationFrame(t => this.loop(t));
     const dt = Math.min(60, now - this.last); this.last = now;
     this.anims = this.anims.filter(a => a.update(now));
-    const physics = this.debris.step(dt), rocking = this.wobble(dt);
+    const physics = this.debris.step(dt), rocking = this.wobble(dt), quaking = this.updateQuake(now);
     if (this.world !== 'lab') this.worlds.get(this.world)?.update(now / 1000, this.renderer);
-    if (physics || rocking) this.shadowDirty = true;
+    if (physics || rocking || quaking) this.shadowDirty = true;
     // camera: player seat with slow breathing, or the collision rail
     const goal = this.pyr.on ? 1 : 0;
     this.pyr.u = this.reduced ? goal : T.MathUtils.damp(this.pyr.u, goal, 5, dt / 1000);
@@ -711,7 +890,7 @@ export class Stage {
       st.label.style.opacity = String(Math.max(0, 1 - this.pyr.u * 3)); // depth says it in the pyramid
     }
     // ── pacing: full rate while anything moves, half rate when the room is still ──
-    const moving = this.anims.length > 0 || physics || rocking || this.camOverride !== null || this.chalk?.busy || u !== goal
+    const moving = this.anims.length > 0 || physics || rocking || quaking || this.camOverride !== null || this.chalk?.busy || u !== goal
       || this.camera.position.distanceToSquared(seat) > 1e-4 || now - this.lastInput < 1500;
     this.frame++;
     if (this.shadowDirty || this.anims.length) { this.renderer.shadowMap.needsUpdate = true; this.shadowDirty = false; }
@@ -757,5 +936,10 @@ export class Stage {
 }
 const LABEL_OFFSET = new T.Vector3(0, .05, -.62);
 const STALE = new T.MeshStandardMaterial({ color: 0xffa0ae, emissive: 0x401018, transparent: true, opacity: .34, depthWrite: false, roughness: .3 });
-const GHOST = new T.MeshBasicMaterial({ color: 0xdfe8ff, transparent: true, opacity: .11, depthWrite: false, blending: T.AdditiveBlending, toneMapped: false });
+const GHOST = new T.ShaderMaterial({
+  uniforms: { opacity: { value: 1 }, tint: { value: new T.Color(0xcfe0ff) } },
+  transparent: true, depthWrite: false, blending: T.AdditiveBlending,
+  vertexShader: 'varying vec3 n; varying vec3 v; void main(){ vec4 mv = modelViewMatrix*vec4(position,1.); n = normalize(normalMatrix*normal); v = normalize(-mv.xyz); gl_Position = projectionMatrix*mv; }',
+  fragmentShader: 'uniform float opacity; uniform vec3 tint; varying vec3 n; varying vec3 v; void main(){ float rim = pow(1. - abs(dot(normalize(n), normalize(v))), 2.2); gl_FragColor = vec4(tint * (.035 + .55 * rim) * opacity, 1.); }',
+});
 export type { Side };
